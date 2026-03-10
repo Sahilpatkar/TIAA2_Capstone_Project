@@ -1,0 +1,40 @@
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    container_name: lazyprices-backend
+    ports:
+      - "5001:5001"
+    volumes:
+      - lazyprices-data:/app/data
+    env_file:
+      - ../../.env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.frontend
+    container_name: lazyprices-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  pipeline:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    volumes:
+      - lazyprices-data:/app/data
+    env_file:
+      - ../../.env
+    working_dir: /app
+    entrypoint: ["python", "run_pipeline.py"]
+    profiles:
+      - pipeline
+
+volumes:
+  lazyprices-data:

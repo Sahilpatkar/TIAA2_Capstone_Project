@@ -1,0 +1,30 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data artifacts
+data/
+*.db
+
+# Node / frontend
+dashboard/frontend/node_modules/
+dashboard/frontend/dist/
+dashboard/frontend/.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.cursor/

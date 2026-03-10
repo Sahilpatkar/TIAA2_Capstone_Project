@@ -1,0 +1,6 @@
+aws_region       = "us-east-1"
+instance_type    = "t3.small"
+key_name         = "my-ec2-keypair"
+allowed_ssh_cidr = "173.13.48.214/32"   # Replace with your public IP
+openai_api_key   = "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"           # Your OpenAI API key
+git_repo_url     = "https://github.com/your-org/TIAA2_Capstone_Project.git"
