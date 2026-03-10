@@ -1,0 +1,15 @@
+.git
+.gitignore
+.cursor
+.env
+
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+deploy
+data
+Reports
+*.pdf
+*.ipynb

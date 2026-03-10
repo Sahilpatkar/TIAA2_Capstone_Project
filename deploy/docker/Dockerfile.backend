@@ -1,0 +1,27 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt gunicorn
+
+RUN python -m nltk.downloader -d /usr/share/nltk_data \
+    punkt punkt_tab stopwords wordnet
+
+COPY config.py store.py run_pipeline.py advisor_query.py ./
+COPY document_pull.py extract_clean.py embeddings.py similarity.py ./
+COPY attention_proxy.py abnormal_returns.py las.py ./
+COPY rag/ ./rag/
+COPY dashboard/backend/ ./dashboard/backend/
+
+RUN mkdir -p /app/data
+
+EXPOSE 5001
+
+WORKDIR /app/dashboard/backend
+
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]
