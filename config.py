@@ -6,15 +6,13 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 FILINGS_DIR = os.path.join(DATA_DIR, "filings")
 VECTORS_DIR = os.path.join(DATA_DIR, "vectors")
 DB_PATH = os.path.join(DATA_DIR, "las_store.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 # SEC / Filing settings
 FILING_TYPE = "10-K"  # MVP scope; extend to "10-Q" later
 MAX_FILINGS_PER_CIK = 5
 
-
-# CIK-to-Ticker mapping  (DJIA 30 + common extras)
 # Keys are CIK integers, values are ticker strings.
-
 CIK_TO_TICKER = {
     66740: "MMM",
     4962: "AXP",
@@ -51,7 +49,6 @@ CIK_TO_TICKER = {
 TICKER_TO_CIK = {v: k for k, v in CIK_TO_TICKER.items()}
 
 
-# 10-K Item sections to extract (ordered as they appear in the filing)
 
 ITEM_SECTIONS = [
     "item_1",
@@ -77,12 +74,8 @@ ITEM_SECTIONS = [
     "item_15",
 ]
 
-
-# Similarity settings
-
 SIMILARITY_MEASURES = ["cosine", "jaccard"]  # supported: cosine, jaccard
 
-# Tables with more than this fraction of numeric chars are dropped during cleaning
 NUMERIC_TABLE_THRESHOLD = 0.15
 
 

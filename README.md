@@ -6,6 +6,8 @@ The pipeline pulls 10-K filings from SEC EDGAR, extracts and cleans the text, co
 
 ## Quick Start
 
+### Option A: Local (no Docker)
+
 ```bash
 # 1. Install dependencies
 pip install -r requirements.txt
@@ -13,26 +15,31 @@ pip install -r requirements.txt
 # 2. Run the full pipeline for Apple (CIK 320193)
 python run_pipeline.py --ciks 320193
 
-# 3. Run again -- already-processed filings are skipped automatically
-python run_pipeline.py --ciks 320193
+# 3. Start the dashboard
+cd dashboard/backend && python app.py        # Terminal 1 (port 5001)
+cd dashboard/frontend && npm install && npm run dev  # Terminal 2 (port 5173)
+```
 
-# 4. Force reprocessing (manual override)
-python run_pipeline.py --ciks 320193 --force
+### Option B: Docker (recommended)
 
-# 5. Skip the SEC download if filings are already on disk
-python run_pipeline.py --ciks 320193 --skip-pull
+```bash
+# 1. Create .env with your OpenAI key (optional, enables LLM features)
+echo "OPENAI_API_KEY=sk-..." > .env
 
-# 6. Query the advisor interface
-python advisor_query.py --portfolio AAPL --top 5
+# 2. Start all services (PostgreSQL, backend, frontend)
+cd deploy/docker
+docker compose up -d --build
 
-# 7. Get JSON output
-python advisor_query.py --portfolio AAPL --top 3 --json
+# 3. Run the pipeline
+docker compose --profile pipeline run --rm pipeline --ciks 320193
+
+# 4. Open http://localhost in your browser
 ```
 
 ## Pipeline Architecture
 
 ```
-SEC EDGAR ─► document_pull.py ─► Raw HTML (entityName_cik/)
+SEC EDGAR ─► document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
                                        │
                                 extract_clean.py
                                        │
@@ -47,7 +54,7 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (entityName_cik/)
                                        │
                                     las.py (Lazy Attention Score)
                                        │
-                                    store.py (SQLite)
+                                    store.py (PostgreSQL / SQLite)
                                        │
                                advisor_query.py
                           (portfolio aggregation + LLM narrative)
@@ -57,7 +64,7 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (entityName_cik/)
 
 | Module | Description |
 |---|---|
-| `config.py` | Central configuration: paths, LAS weights, CIK-ticker mapping (DJIA 30), CAR window, section labels |
+| `config.py` | Central configuration: paths, LAS weights, CIK-ticker mapping (DJIA 30), CAR window, database URL |
 | `document_pull.py` | Pull 10-K filings from SEC EDGAR; saves raw HTML and `company_facts.json` under `entityName_cik/` |
 | `extract_clean.py` | Parse iXBRL HTML, strip noise (scripts, styles, XBRL blocks, numeric tables), split text by Item section |
 | `embeddings.py` | Build count vectors (or TF-IDF) per document and per section using sklearn |
@@ -65,7 +72,7 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (entityName_cik/)
 | `attention_proxy.py` | MVP placeholder returning 0.5 for all filings (pending SEC FOIA download data) |
 | `abnormal_returns.py` | Fetch daily prices from Yahoo Finance, compute market-adjusted CAR over a configurable event window |
 | `las.py` | Combine change intensity, attention proxy, and CAR into a weighted LAS with rank or z-score normalization |
-| `store.py` | SQLite persistence layer; upsert by `(cik, accession)` with query helpers and pipeline run tracking |
+| `store.py` | Database persistence layer (PostgreSQL via Docker, SQLite fallback); upsert by `(cik, accession)` |
 | `advisor_query.py` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative |
 | `run_pipeline.py` | End-to-end CLI orchestrator that runs all stages for a given set of CIKs, with incremental processing |
 | `rag/chunker.py` | Section-aware text chunker for 10-K filings with configurable max size and overlap |
@@ -88,9 +95,24 @@ Where `f()` is a cross-sectional normalization (rank percentile by default). Wei
 | `w_attention` | 0.25 | Investor attention proxy (placeholder for MVP) |
 | `w_car` | 0.25 | Absolute cumulative abnormal return around filing date |
 
+## Database
+
+The application supports two database backends:
+
+| Backend | When used | Connection |
+|---|---|---|
+| **PostgreSQL** | Docker deployment (production) | Automatic via `DATABASE_URL` env var |
+| **SQLite** | Local dev without Docker | `data/las_store.db` (no setup needed) |
+
+When running via `docker compose`, the `DATABASE_URL` is injected automatically. For local runs without Docker, SQLite is used as a zero-config fallback.
+
+### Schema
+
+Four tables: `filings` (LAS scores and metrics), `pipeline_runs` (incremental processing tracker), `clients` (advisor client profiles), and `client_portfolios` (client holdings).
+
 ## Incremental Processing
 
-The pipeline tracks which filings have been fully processed and skips them on subsequent runs. This is managed through a `pipeline_runs` table in the SQLite database keyed by `(cik, accession)`.
+The pipeline tracks which filings have been fully processed and skips them on subsequent runs. This is managed through the `pipeline_runs` table keyed by `(cik, accession)`.
 
 **How it works:**
 
@@ -111,6 +133,7 @@ python run_pipeline.py --ciks 320193 --force
 
 All tunable parameters live in `config.py`:
 
+- **DATABASE_URL** -- database connection string; reads from env, falls back to SQLite
 - **PIPELINE_VERSION** -- pipeline version string (default `"1.0"`); bump to force reprocessing after logic changes
 - **LAS_WEIGHTS** -- component weights for the LAS formula
 - **LAS_NORMALIZATION** -- `"rank"` (percentile) or `"zscore"`
@@ -198,25 +221,39 @@ Settings in `config.py`:
 
 ```
 project_root/
-├── Apple Inc._0000320193/          # One folder per entity
-│   ├── *.html                      # Raw 10-K filings
-│   ├── company_facts.json          # SEC XBRL company facts
-│   └── cleaned/
-│       ├── *_cleaned.json          # Cleaned text + sections
-│       └── similarity_results.json # Year-over-year similarity
 ├── data/
-│   ├── las_store.db                # SQLite database (filings + pipeline_runs tables)
+│   ├── las_store.db                # SQLite database (local dev fallback)
+│   ├── filings/                    # Downloaded 10-K filings by entity
+│   │   └── EntityName_CIK/
+│   │       ├── *.html              # Raw 10-K filings
+│   │       ├── company_facts.json  # SEC XBRL company facts
+│   │       └── cleaned/
+│   │           └── *_cleaned.json  # Cleaned text + sections
 │   ├── vectors/                    # Sparse count vectors (.npz)
 │   └── vectordb/                   # ChromaDB persistence (RAG embeddings)
-│       └── indexed.json            # Manifest of indexed filings
+├── deploy/
+│   ├── docker/
+│   │   ├── Dockerfile.backend      # Python 3.10 + Gunicorn
+│   │   ├── Dockerfile.frontend     # Node 18 build + Nginx
+│   │   ├── docker-compose.yml      # PostgreSQL, backend, frontend, pipeline
+│   │   └── nginx.conf              # Static files + /api reverse proxy
+│   ├── terraform/                  # AWS EC2 infrastructure
+│   └── scripts/
+│       └── user_data.sh            # EC2 bootstrap script
 ├── rag/
 │   ├── chunker.py                  # Section-aware filing chunker
 │   ├── providers.py                # Embedding, LLM, vector store abstractions
 │   └── index.py                    # CLI indexing tool
-├── dashboard/                      # Advisor dashboard (Flask + React)
+├── dashboard/
+│   ├── backend/
+│   │   ├── app.py                  # Flask API server
+│   │   └── chat.py                 # RAG-enhanced chat handler
+│   └── frontend/                   # React + Vite dashboard
 ├── config.py
+├── store.py
 ├── run_pipeline.py
-└── ...
+├── DEPLOYMENT.md                   # AWS deployment guide
+└── requirements.txt
 ```
 
 ## Requirements
@@ -229,6 +266,7 @@ Python 3.10+ with the packages listed in `requirements.txt`. Key dependencies:
 - `nltk` -- tokenization and lemmatization
 - `openai` -- LLM narrative generation and embeddings (optional)
 - `chromadb` -- vector store for RAG retrieval (optional)
+- `psycopg2-binary` -- PostgreSQL adapter (used in Docker deployment)
 - `flask` / `flask-cors` -- dashboard API backend
 - `python-dotenv` -- environment variable loading
 
@@ -252,18 +290,27 @@ An interactive React + Flask dashboard provides a visual interface for exploring
 
 ### Starting the Dashboard
 
+**With Docker (recommended):**
+
 ```bash
-# Terminal 1 – Flask API backend (port 5001)
+cd deploy/docker
+docker compose up -d --build
+# Open http://localhost
+```
+
+**Without Docker (local dev):**
+
+```bash
+# Terminal 1 -- Flask API backend (port 5001)
 cd dashboard/backend
 python app.py
 
-# Terminal 2 – React frontend (port 5173, proxied to backend)
+# Terminal 2 -- React frontend (port 5173, proxied to backend)
 cd dashboard/frontend
 npm install
 npm run dev
+# Open http://localhost:5173
 ```
-
-Open http://localhost:5173 in your browser.
 
 ### Dashboard Features
 
@@ -320,6 +367,16 @@ dashboard/
             ├── ChatPanel.jsx
             └── ClientModal.jsx
 ```
+
+## AWS Deployment
+
+The application can be deployed to a single EC2 instance using Docker Compose and Terraform. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide covering:
+
+- Terraform setup (EC2, security groups, SSM for secrets)
+- Docker Compose with PostgreSQL, Flask/Gunicorn, and Nginx
+- Pipeline execution on the instance
+- Redeployment workflow
+- Troubleshooting
 
 ## Scope and Future Work
 
