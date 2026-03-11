@@ -267,8 +267,10 @@ class LASStore:
 
     def _deduplicate_filings(self) -> None:
         p = self._p()
+        like_pattern = "%-%"
         rows = self._fetchall(
-            "SELECT cik, accession FROM filings WHERE accession LIKE '%-%'"
+            f"SELECT cik, accession FROM filings WHERE accession LIKE {p}",
+            (like_pattern,),
         )
         if not rows:
             return
@@ -296,7 +298,8 @@ class LASStore:
                 updated += 1
 
         pr_rows = self._fetchall(
-            "SELECT cik, accession FROM pipeline_runs WHERE accession LIKE '%-%'"
+            f"SELECT cik, accession FROM pipeline_runs WHERE accession LIKE {p}",
+            (like_pattern,),
         )
         for row in pr_rows:
             cik, acc = row["cik"], row["accession"]
