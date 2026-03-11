@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lazyprices-postgres
+    environment:
+      POSTGRES_DB: lazyprices
+      POSTGRES_USER: lazyprices
+      POSTGRES_PASSWORD: lazyprices
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazyprices"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ../..
@@ -10,6 +28,11 @@ services:
       - lazyprices-data:/app/data
     env_file:
       - ../../.env
+    environment:
+      DATABASE_URL: postgresql://lazyprices:lazyprices@postgres:5432/lazyprices
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -31,6 +54,11 @@ services:
       - lazyprices-data:/app/data
     env_file:
       - ../../.env
+    environment:
+      DATABASE_URL: postgresql://lazyprices:lazyprices@postgres:5432/lazyprices
+    depends_on:
+      postgres:
+        condition: service_healthy
     working_dir: /app
     entrypoint: ["python", "run_pipeline.py"]
     profiles:
@@ -38,3 +66,4 @@ services:
 
 volumes:
   lazyprices-data:
+  postgres-data:

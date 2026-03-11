@@ -1,8 +1,8 @@
 """
-SQLite persistence layer for LAS and filing features.
+Database persistence layer for LAS and filing features.
 
-Schema: one row per filing, upserted by (cik, accession).
-DB file lives at config.DB_PATH  (data/las_store.db).
+Supports PostgreSQL (via psycopg2) when DATABASE_URL is set to a postgresql:// URL,
+and falls back to SQLite for local development without Docker.
 
 Usage:
     from store import LASStore
@@ -20,7 +20,77 @@ import pandas as pd
 
 import config
 
-_CREATE_TABLE = """
+_USE_PG = config.DATABASE_URL.startswith("postgresql://")
+
+if _USE_PG:
+    import psycopg2
+    import psycopg2.extras
+
+
+# ---------------------------------------------------------------------------
+# Schema DDL (PostgreSQL flavour)
+# ---------------------------------------------------------------------------
+
+_PG_CREATE_FILINGS = """
+CREATE TABLE IF NOT EXISTS filings (
+    cik              INTEGER  NOT NULL,
+    entity_name      TEXT,
+    accession        TEXT     NOT NULL,
+    filed_date       TEXT,
+    report_date      TEXT,
+    ticker           TEXT,
+    similarity_cosine  DOUBLE PRECISION,
+    similarity_jaccard DOUBLE PRECISION,
+    change_intensity   DOUBLE PRECISION,
+    attention_proxy    DOUBLE PRECISION,
+    car                DOUBLE PRECISION,
+    las                DOUBLE PRECISION,
+    section_changes_json TEXT,
+    cleaned_text_path    TEXT,
+    PRIMARY KEY (cik, accession)
+);
+"""
+
+_PG_CREATE_PIPELINE_RUNS = """
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    cik              INTEGER NOT NULL,
+    accession        TEXT    NOT NULL,
+    ticker           TEXT,
+    filed_date       TEXT,
+    report_date      TEXT,
+    pipeline_version TEXT    NOT NULL,
+    processed_at     TEXT    NOT NULL,
+    PRIMARY KEY (cik, accession)
+);
+"""
+
+_PG_CREATE_CLIENTS = """
+CREATE TABLE IF NOT EXISTS clients (
+    id               SERIAL PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    risk_tolerance   TEXT    NOT NULL DEFAULT 'moderate',
+    investment_goal  TEXT,
+    notes            TEXT,
+    is_preset        INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT    NOT NULL,
+    updated_at       TEXT    NOT NULL
+);
+"""
+
+_PG_CREATE_CLIENT_PORTFOLIOS = """
+CREATE TABLE IF NOT EXISTS client_portfolios (
+    client_id  INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    ticker     TEXT    NOT NULL,
+    weight     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (client_id, ticker)
+);
+"""
+
+# ---------------------------------------------------------------------------
+# Schema DDL (SQLite flavour)
+# ---------------------------------------------------------------------------
+
+_SQLITE_CREATE_FILINGS = """
 CREATE TABLE IF NOT EXISTS filings (
     cik              INTEGER  NOT NULL,
     entity_name      TEXT,
@@ -40,7 +110,7 @@ CREATE TABLE IF NOT EXISTS filings (
 );
 """
 
-_CREATE_PIPELINE_RUNS = """
+_SQLITE_CREATE_PIPELINE_RUNS = """
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     cik              INTEGER NOT NULL,
     accession        TEXT    NOT NULL,
@@ -53,7 +123,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 """
 
-_CREATE_CLIENTS = """
+_SQLITE_CREATE_CLIENTS = """
 CREATE TABLE IF NOT EXISTS clients (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     name             TEXT    NOT NULL,
@@ -66,7 +136,7 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 """
 
-_CREATE_CLIENT_PORTFOLIOS = """
+_SQLITE_CREATE_CLIENT_PORTFOLIOS = """
 CREATE TABLE IF NOT EXISTS client_portfolios (
     client_id  INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     ticker     TEXT    NOT NULL,
@@ -74,6 +144,10 @@ CREATE TABLE IF NOT EXISTS client_portfolios (
     PRIMARY KEY (client_id, ticker)
 );
 """
+
+# ---------------------------------------------------------------------------
+# Preset client profiles
+# ---------------------------------------------------------------------------
 
 _PRESET_PROFILES = [
     {
@@ -113,172 +187,251 @@ def _normalize_accession(acc: str | None) -> str | None:
 
 
 class LASStore:
-    def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or config.DB_PATH
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute(_CREATE_TABLE)
-        self._conn.execute(_CREATE_PIPELINE_RUNS)
-        self._conn.execute(_CREATE_CLIENTS)
-        self._conn.execute(_CREATE_CLIENT_PORTFOLIOS)
-        self._conn.commit()
+    def __init__(self, db_url: str | None = None):
+        url = db_url or config.DATABASE_URL
+        self._pg = url.startswith("postgresql://")
+
+        if self._pg:
+            self._conn = psycopg2.connect(url)
+            self._conn.autocommit = False
+            self._init_pg_schema()
+        else:
+            db_path = url.replace("sqlite:///", "") if url.startswith("sqlite:///") else config.DB_PATH
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            self._conn = sqlite3.connect(db_path)
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._conn.row_factory = sqlite3.Row
+            self._init_sqlite_schema()
+
         self._deduplicate_filings()
         self._seed_presets()
 
-    
-    # One-time migration: normalise accession numbers (idempotent)
+    # -- helpers for DB-agnostic execution --
 
+    def _cursor(self):
+        if self._pg:
+            return self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        return self._conn.cursor()
+
+    def _ph(self, count: int) -> str:
+        """Return comma-separated parameter placeholders."""
+        marker = "%s" if self._pg else "?"
+        return ",".join([marker] * count)
+
+    def _p(self) -> str:
+        """Single parameter placeholder."""
+        return "%s" if self._pg else "?"
+
+    def _commit(self):
+        self._conn.commit()
+
+    def _execute(self, sql: str, params=None):
+        cur = self._cursor()
+        cur.execute(sql, params or ())
+        return cur
+
+    def _fetchall(self, sql: str, params=None) -> list[dict]:
+        cur = self._cursor()
+        cur.execute(sql, params or ())
+        rows = cur.fetchall()
+        if self._pg:
+            return [dict(r) for r in rows]
+        return [dict(r) for r in rows]
+
+    def _fetchone(self, sql: str, params=None) -> dict | None:
+        cur = self._cursor()
+        cur.execute(sql, params or ())
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    # -- schema init --
+
+    def _init_pg_schema(self):
+        cur = self._conn.cursor()
+        cur.execute(_PG_CREATE_FILINGS)
+        cur.execute(_PG_CREATE_PIPELINE_RUNS)
+        cur.execute(_PG_CREATE_CLIENTS)
+        cur.execute(_PG_CREATE_CLIENT_PORTFOLIOS)
+        self._conn.commit()
+
+    def _init_sqlite_schema(self):
+        self._conn.execute(_SQLITE_CREATE_FILINGS)
+        self._conn.execute(_SQLITE_CREATE_PIPELINE_RUNS)
+        self._conn.execute(_SQLITE_CREATE_CLIENTS)
+        self._conn.execute(_SQLITE_CREATE_CLIENT_PORTFOLIOS)
+        self._conn.commit()
+
+    # -- dedup migration (idempotent) --
 
     def _deduplicate_filings(self) -> None:
-        """Remove duplicate filings caused by hyphenated vs non-hyphenated accession numbers."""
-        cur = self._conn.execute(
+        p = self._p()
+        rows = self._fetchall(
             "SELECT cik, accession FROM filings WHERE accession LIKE '%-%'"
         )
-        hyphenated = cur.fetchall()
-        if not hyphenated:
+        if not rows:
             return
 
         removed = 0
         updated = 0
-        for row in hyphenated:
+        for row in rows:
             cik, acc = row["cik"], row["accession"]
             canonical = acc.replace("-", "")
-            exists = self._conn.execute(
-                "SELECT 1 FROM filings WHERE cik = ? AND accession = ?",
+            exists = self._fetchone(
+                f"SELECT 1 FROM filings WHERE cik = {p} AND accession = {p}",
                 (cik, canonical),
-            ).fetchone()
+            )
             if exists:
-                self._conn.execute(
-                    "DELETE FROM filings WHERE cik = ? AND accession = ?",
+                self._execute(
+                    f"DELETE FROM filings WHERE cik = {p} AND accession = {p}",
                     (cik, acc),
                 )
                 removed += 1
             else:
-                self._conn.execute(
-                    "UPDATE filings SET accession = ? WHERE cik = ? AND accession = ?",
+                self._execute(
+                    f"UPDATE filings SET accession = {p} WHERE cik = {p} AND accession = {p}",
                     (canonical, cik, acc),
                 )
                 updated += 1
 
-        pr_cur = self._conn.execute(
+        pr_rows = self._fetchall(
             "SELECT cik, accession FROM pipeline_runs WHERE accession LIKE '%-%'"
         )
-        for row in pr_cur.fetchall():
+        for row in pr_rows:
             cik, acc = row["cik"], row["accession"]
             canonical = acc.replace("-", "")
-            exists = self._conn.execute(
-                "SELECT 1 FROM pipeline_runs WHERE cik = ? AND accession = ?",
+            exists = self._fetchone(
+                f"SELECT 1 FROM pipeline_runs WHERE cik = {p} AND accession = {p}",
                 (cik, canonical),
-            ).fetchone()
+            )
             if exists:
-                self._conn.execute(
-                    "DELETE FROM pipeline_runs WHERE cik = ? AND accession = ?",
+                self._execute(
+                    f"DELETE FROM pipeline_runs WHERE cik = {p} AND accession = {p}",
                     (cik, acc),
                 )
             else:
-                self._conn.execute(
-                    "UPDATE pipeline_runs SET accession = ? WHERE cik = ? AND accession = ?",
+                self._execute(
+                    f"UPDATE pipeline_runs SET accession = {p} WHERE cik = {p} AND accession = {p}",
                     (canonical, cik, acc),
                 )
 
-        self._conn.commit()
+        self._commit()
         if removed or updated:
             print(f"[store] Dedup migration: {removed} duplicates removed, {updated} accessions normalised")
 
-
-    # Write
-
+    # -- write --
 
     def upsert(self, row: dict) -> None:
-        """Insert or replace a filing record."""
+        """Insert or update a filing record."""
         section_json = row.get("section_changes_json")
         if isinstance(section_json, (list, dict)):
             section_json = json.dumps(section_json)
 
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO filings
-                (cik, entity_name, accession, filed_date, report_date, ticker,
-                 similarity_cosine, similarity_jaccard, change_intensity,
-                 attention_proxy, car, las, section_changes_json, cleaned_text_path)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                row.get("cik"),
-                row.get("entity_name"),
-                _normalize_accession(row.get("accession")),
-                row.get("filed_date"),
-                row.get("report_date"),
-                row.get("ticker"),
-                row.get("similarity_cosine"),
-                row.get("similarity_jaccard"),
-                row.get("change_intensity"),
-                row.get("attention_proxy"),
-                row.get("car"),
-                row.get("las"),
-                section_json,
-                row.get("cleaned_text_path"),
-            ),
+        params = (
+            row.get("cik"),
+            row.get("entity_name"),
+            _normalize_accession(row.get("accession")),
+            row.get("filed_date"),
+            row.get("report_date"),
+            row.get("ticker"),
+            row.get("similarity_cosine"),
+            row.get("similarity_jaccard"),
+            row.get("change_intensity"),
+            row.get("attention_proxy"),
+            row.get("car"),
+            row.get("las"),
+            section_json,
+            row.get("cleaned_text_path"),
         )
-        self._conn.commit()
+
+        if self._pg:
+            self._execute(
+                """
+                INSERT INTO filings
+                    (cik, entity_name, accession, filed_date, report_date, ticker,
+                     similarity_cosine, similarity_jaccard, change_intensity,
+                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (cik, accession) DO UPDATE SET
+                    entity_name = EXCLUDED.entity_name,
+                    filed_date = EXCLUDED.filed_date,
+                    report_date = EXCLUDED.report_date,
+                    ticker = EXCLUDED.ticker,
+                    similarity_cosine = EXCLUDED.similarity_cosine,
+                    similarity_jaccard = EXCLUDED.similarity_jaccard,
+                    change_intensity = EXCLUDED.change_intensity,
+                    attention_proxy = EXCLUDED.attention_proxy,
+                    car = EXCLUDED.car,
+                    las = EXCLUDED.las,
+                    section_changes_json = EXCLUDED.section_changes_json,
+                    cleaned_text_path = EXCLUDED.cleaned_text_path
+                """,
+                params,
+            )
+        else:
+            self._execute(
+                """
+                INSERT OR REPLACE INTO filings
+                    (cik, entity_name, accession, filed_date, report_date, ticker,
+                     similarity_cosine, similarity_jaccard, change_intensity,
+                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                params,
+            )
+        self._commit()
 
     def upsert_many(self, rows: list[dict]) -> None:
         for r in rows:
             self.upsert(r)
 
-
-    # Read helpers
-
+    # -- read helpers --
 
     def _rows_to_df(self, rows) -> pd.DataFrame:
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame([dict(r) for r in rows])
+        return pd.DataFrame(rows)
 
     def get_all_filings(self) -> pd.DataFrame:
-        cur = self._conn.execute("SELECT * FROM filings ORDER BY ticker, report_date")
-        return self._rows_to_df(cur.fetchall())
+        rows = self._fetchall("SELECT * FROM filings ORDER BY ticker, report_date")
+        return self._rows_to_df(rows)
 
     def get_filings_by_cik(self, cik: int) -> pd.DataFrame:
-        cur = self._conn.execute(
-            "SELECT * FROM filings WHERE cik = ? ORDER BY report_date", (cik,)
+        p = self._p()
+        rows = self._fetchall(
+            f"SELECT * FROM filings WHERE cik = {p} ORDER BY report_date", (cik,)
         )
-        return self._rows_to_df(cur.fetchall())
+        return self._rows_to_df(rows)
 
     def get_filings_by_tickers(self, tickers: list[str]) -> pd.DataFrame:
-        placeholders = ",".join("?" for _ in tickers)
-        cur = self._conn.execute(
+        placeholders = ",".join([self._p()] * len(tickers))
+        rows = self._fetchall(
             f"SELECT * FROM filings WHERE ticker IN ({placeholders}) ORDER BY ticker, report_date",
             [t.upper() for t in tickers],
         )
-        return self._rows_to_df(cur.fetchall())
+        return self._rows_to_df(rows)
 
     def get_latest_by_ticker(self, ticker: str) -> dict | None:
-        cur = self._conn.execute(
-            "SELECT * FROM filings WHERE ticker = ? ORDER BY report_date DESC LIMIT 1",
+        p = self._p()
+        return self._fetchone(
+            f"SELECT * FROM filings WHERE ticker = {p} ORDER BY report_date DESC LIMIT 1",
             (ticker.upper(),),
         )
-        row = cur.fetchone()
-        return dict(row) if row else None
 
-
-    # Pipeline run tracking
-
+    # -- pipeline run tracking --
 
     def is_processed(self, cik: int, accession: str, pipeline_version: str) -> bool:
-        """Return True if this filing was already processed at the given version."""
-        cur = self._conn.execute(
-            "SELECT 1 FROM pipeline_runs WHERE cik = ? AND accession = ? AND pipeline_version = ?",
+        p = self._p()
+        row = self._fetchone(
+            f"SELECT 1 FROM pipeline_runs WHERE cik = {p} AND accession = {p} AND pipeline_version = {p}",
             (cik, _normalize_accession(accession), pipeline_version),
         )
-        return cur.fetchone() is not None
+        return row is not None
 
     def get_unprocessed_filings(
         self, cik: int, filings_meta: list[dict], pipeline_version: str
     ) -> list[dict]:
-        """Filter *filings_meta* to only those not yet processed at *pipeline_version*."""
         return [
             fm for fm in filings_meta
             if not self.is_processed(cik, fm["accession"], pipeline_version)
@@ -293,134 +446,185 @@ class LASStore:
         report_date: str | None,
         pipeline_version: str,
     ) -> None:
-        """Record that a filing has been fully processed."""
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO pipeline_runs
-                (cik, accession, ticker, filed_date, report_date,
-                 pipeline_version, processed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                cik,
-                _normalize_accession(accession),
-                ticker,
-                filed_date,
-                report_date,
-                pipeline_version,
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        params = (
+            cik,
+            _normalize_accession(accession),
+            ticker,
+            filed_date,
+            report_date,
+            pipeline_version,
+            datetime.now(timezone.utc).isoformat(),
         )
-        self._conn.commit()
 
+        if self._pg:
+            self._execute(
+                """
+                INSERT INTO pipeline_runs
+                    (cik, accession, ticker, filed_date, report_date,
+                     pipeline_version, processed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (cik, accession) DO UPDATE SET
+                    ticker = EXCLUDED.ticker,
+                    filed_date = EXCLUDED.filed_date,
+                    report_date = EXCLUDED.report_date,
+                    pipeline_version = EXCLUDED.pipeline_version,
+                    processed_at = EXCLUDED.processed_at
+                """,
+                params,
+            )
+        else:
+            self._execute(
+                """
+                INSERT OR REPLACE INTO pipeline_runs
+                    (cik, accession, ticker, filed_date, report_date,
+                     pipeline_version, processed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+        self._commit()
 
-    # Client profiles
-
+    # -- client profiles --
 
     def _seed_presets(self) -> None:
-        """Insert preset client profiles on first run (idempotent)."""
-        cur = self._conn.execute(
-            "SELECT COUNT(*) FROM clients WHERE is_preset = 1"
-        )
-        if cur.fetchone()[0] > 0:
+        p = self._p()
+        row = self._fetchone(f"SELECT COUNT(*) as cnt FROM clients WHERE is_preset = 1")
+        if row["cnt"] > 0:
             return
         now = datetime.now(timezone.utc).isoformat()
         for profile in _PRESET_PROFILES:
-            cur = self._conn.execute(
-                """
-                INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
-                                     is_preset, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
-                """,
-                (
-                    profile["name"],
-                    profile["risk_tolerance"],
-                    profile["investment_goal"],
-                    profile["notes"],
-                    now,
-                    now,
-                ),
-            )
-            client_id = cur.lastrowid
-            for ticker in profile["tickers"]:
-                self._conn.execute(
-                    "INSERT INTO client_portfolios (client_id, ticker, weight) VALUES (?, ?, 1.0)",
-                    (client_id, ticker),
+            if self._pg:
+                cur = self._execute(
+                    f"""
+                    INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
+                                         is_preset, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, 1, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        profile["name"],
+                        profile["risk_tolerance"],
+                        profile["investment_goal"],
+                        profile["notes"],
+                        now,
+                        now,
+                    ),
                 )
-        self._conn.commit()
+                client_id = cur.fetchone()["id"]
+            else:
+                cur = self._execute(
+                    """
+                    INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
+                                         is_preset, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        profile["name"],
+                        profile["risk_tolerance"],
+                        profile["investment_goal"],
+                        profile["notes"],
+                        now,
+                        now,
+                    ),
+                )
+                client_id = cur.lastrowid
+            for ticker in profile["tickers"]:
+                self._execute(
+                    f"INSERT INTO client_portfolios (client_id, ticker, weight) VALUES ({self._ph(3)})",
+                    (client_id, ticker, 1.0),
+                )
+        self._commit()
 
     def get_all_clients(self) -> list[dict]:
-        """Return all clients with their portfolio tickers."""
-        cur = self._conn.execute(
+        p = self._p()
+        clients_rows = self._fetchall(
             "SELECT * FROM clients ORDER BY is_preset DESC, name"
         )
         clients = []
-        for row in cur.fetchall():
-            client = dict(row)
-            pcur = self._conn.execute(
-                "SELECT ticker, weight FROM client_portfolios WHERE client_id = ? ORDER BY ticker",
+        for client in clients_rows:
+            portfolio_rows = self._fetchall(
+                f"SELECT ticker, weight FROM client_portfolios WHERE client_id = {p} ORDER BY ticker",
                 (client["id"],),
             )
-            portfolio_rows = pcur.fetchall()
             client["tickers"] = [r["ticker"] for r in portfolio_rows]
             client["weights"] = [r["weight"] for r in portfolio_rows]
             clients.append(client)
         return clients
 
     def get_client(self, client_id: int) -> dict | None:
-        cur = self._conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
-        row = cur.fetchone()
-        if not row:
+        p = self._p()
+        client = self._fetchone(
+            f"SELECT * FROM clients WHERE id = {p}", (client_id,)
+        )
+        if not client:
             return None
-        client = dict(row)
-        pcur = self._conn.execute(
-            "SELECT ticker, weight FROM client_portfolios WHERE client_id = ? ORDER BY ticker",
+        portfolio_rows = self._fetchall(
+            f"SELECT ticker, weight FROM client_portfolios WHERE client_id = {p} ORDER BY ticker",
             (client_id,),
         )
-        portfolio_rows = pcur.fetchall()
         client["tickers"] = [r["ticker"] for r in portfolio_rows]
         client["weights"] = [r["weight"] for r in portfolio_rows]
         return client
 
     def create_client(self, data: dict) -> dict:
         now = datetime.now(timezone.utc).isoformat()
-        cur = self._conn.execute(
-            """
-            INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
-                                 is_preset, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
-            """,
-            (
-                data["name"],
-                data.get("risk_tolerance", "moderate"),
-                data.get("investment_goal"),
-                data.get("notes"),
-                now,
-                now,
-            ),
-        )
-        client_id = cur.lastrowid
+        if self._pg:
+            cur = self._execute(
+                """
+                INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
+                                     is_preset, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 0, %s, %s)
+                RETURNING id
+                """,
+                (
+                    data["name"],
+                    data.get("risk_tolerance", "moderate"),
+                    data.get("investment_goal"),
+                    data.get("notes"),
+                    now,
+                    now,
+                ),
+            )
+            client_id = cur.fetchone()["id"]
+        else:
+            cur = self._execute(
+                """
+                INSERT INTO clients (name, risk_tolerance, investment_goal, notes,
+                                     is_preset, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    data["name"],
+                    data.get("risk_tolerance", "moderate"),
+                    data.get("investment_goal"),
+                    data.get("notes"),
+                    now,
+                    now,
+                ),
+            )
+            client_id = cur.lastrowid
         tickers = data.get("tickers", [])
         weights = data.get("weights", [1.0] * len(tickers))
         for i, ticker in enumerate(tickers):
             w = weights[i] if i < len(weights) else 1.0
-            self._conn.execute(
-                "INSERT INTO client_portfolios (client_id, ticker, weight) VALUES (?, ?, ?)",
+            self._execute(
+                f"INSERT INTO client_portfolios (client_id, ticker, weight) VALUES ({self._ph(3)})",
                 (client_id, ticker.upper(), w),
             )
-        self._conn.commit()
+        self._commit()
         return self.get_client(client_id)
 
     def update_client(self, client_id: int, data: dict) -> dict | None:
+        p = self._p()
         existing = self.get_client(client_id)
         if not existing:
             return None
         now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            """
+        self._execute(
+            f"""
             UPDATE clients
-            SET name = ?, risk_tolerance = ?, investment_goal = ?, notes = ?, updated_at = ?
-            WHERE id = ?
+            SET name = {p}, risk_tolerance = {p}, investment_goal = {p}, notes = {p}, updated_at = {p}
+            WHERE id = {p}
             """,
             (
                 data.get("name", existing["name"]),
@@ -432,32 +636,37 @@ class LASStore:
             ),
         )
         if "tickers" in data:
-            self._conn.execute(
-                "DELETE FROM client_portfolios WHERE client_id = ?", (client_id,)
+            self._execute(
+                f"DELETE FROM client_portfolios WHERE client_id = {p}", (client_id,)
             )
             tickers = data["tickers"]
             weights = data.get("weights", [1.0] * len(tickers))
             for i, ticker in enumerate(tickers):
                 w = weights[i] if i < len(weights) else 1.0
-                self._conn.execute(
-                    "INSERT INTO client_portfolios (client_id, ticker, weight) VALUES (?, ?, ?)",
+                self._execute(
+                    f"INSERT INTO client_portfolios (client_id, ticker, weight) VALUES ({self._ph(3)})",
                     (client_id, ticker.upper(), w),
                 )
-        self._conn.commit()
+        self._commit()
         return self.get_client(client_id)
 
     def delete_client(self, client_id: int) -> bool:
-        cur = self._conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
-        if not cur.fetchone():
+        p = self._p()
+        row = self._fetchone(
+            f"SELECT id FROM clients WHERE id = {p}", (client_id,)
+        )
+        if not row:
             return False
-        self._conn.execute("DELETE FROM client_portfolios WHERE client_id = ?", (client_id,))
-        self._conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
-        self._conn.commit()
+        self._execute(
+            f"DELETE FROM client_portfolios WHERE client_id = {p}", (client_id,)
+        )
+        self._execute(
+            f"DELETE FROM clients WHERE id = {p}", (client_id,)
+        )
+        self._commit()
         return True
 
-
-    # Lifecycle
-
+    # -- lifecycle --
 
     def close(self):
         self._conn.close()
