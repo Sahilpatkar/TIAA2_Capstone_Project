@@ -31,13 +31,22 @@ _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 
 def _report_date_from_basename(basename: str) -> str | None:
     """
-    Extract report date from a cleaned-filing basename like
-    '000032019325000079_aapl-20250927'.  Returns 'YYYY-MM-DD' or None.
+    Extract report date from a cleaned-filing basename.
+    Supports:
+      - '000032019325000079_aapl-20250927' (hyphen + YYYYMMDD)
+      - '000100103914000228_fy2014_q4x10k' (_fy + YYYY, fiscal year end 09-30)
+    Returns 'YYYY-MM-DD' or None.
     """
-    m = re.search(r"-(\d{8})", basename)
+    # Standard: hyphen followed by 8 digits (e.g. aapl-20250927)
+    m = re.search(r"-(\d{8})\b", basename)
     if m:
         d = m.group(1)
         return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    # DIS-style: _fyYYYY (e.g. fy2014_q4x10k) — use fiscal year end 09-30
+    m = re.search(r"_fy(\d{4})\b", basename, re.I)
+    if m:
+        y = m.group(1)
+        return f"{y}-09-30"
     return None
 
 
@@ -63,6 +72,13 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
         if rd:
             f["_report_date"] = rd
             dated.append(f)
+
+    if len(dated) < 2:
+        # Fallback: if we have 2+ filings but no report dates parsed, pair by basename order
+        if len(filings) >= 2:
+            sorted_f = sorted(filings, key=lambda x: x["_basename"])
+            return [(sorted_f[i], sorted_f[i - 1]) for i in range(1, len(sorted_f))]
+        return []
 
     dated.sort(key=lambda x: x["_report_date"])
 
@@ -109,8 +125,9 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     consecutive filing pairs in *entity_dir*.
     """
     filings = load_cleaned_filings(entity_dir)
+    cleaned_dir = os.path.join(entity_dir, "cleaned")
     if len(filings) < 2:
-        print(f"  Need at least 2 filings for comparison; found {len(filings)}")
+        print(f"  Need at least 2 filings for comparison; found {len(filings)} in {cleaned_dir!r}")
         return []
 
     vec_result = build_vectors(entity_dir, use_tfidf=False, remove_stopwords=True)
@@ -118,6 +135,8 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     section_vectors = vec_result["section_vectors"]
 
     pairs = pair_filings(filings)
+    if not pairs and len(filings) >= 2:
+        print(f"  WARNING: {len(filings)} filings loaded but 0 pairs formed (check report-date format in filenames or 200–550 day gap).")
     results = []
 
     for current, prior in pairs:
