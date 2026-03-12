@@ -235,6 +235,9 @@ def run(
         sim_results = compute_similarity(entity_dir)
         if not sim_results:
             print("  WARNING: Need >= 2 filings for similarity.")
+            if len(cleaned_paths) >= 2:
+                print("  (You have 2+ cleaned filings but no pairs passed the 200–550 day gap filter. "
+                      "Check report dates or run with --force after pulling all filings.)")
 
         sim_lookup: dict[str, dict] = {}
         for sr in sim_results:
@@ -249,11 +252,21 @@ def run(
             report_date = fm.get("report_date")
 
             basename = None
+            acc_no_dash = accession.replace("-", "")
             for cp in cleaned_paths:
                 bn = os.path.basename(cp).replace("_cleaned.json", "")
-                if accession.replace("-", "") in bn:
+                if acc_no_dash in bn:
                     basename = bn
                     break
+            # Fallback: match by report_date + ticker (handles accession format quirks)
+            if basename is None and report_date and ticker and ticker != "?":
+                date_compact = report_date.replace("-", "") if isinstance(report_date, str) else ""
+                ticker_lower = ticker.lower()
+                for cp in cleaned_paths:
+                    bn = os.path.basename(cp).replace("_cleaned.json", "")
+                    if date_compact in bn and ticker_lower in bn.lower():
+                        basename = bn
+                        break
 
             sr = sim_lookup.get(basename, {})
 
