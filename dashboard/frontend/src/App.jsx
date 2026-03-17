@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Component } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, Component } from 'react';
 import './App.css';
 import {
   fetchTickers, fetchFilings, fetchPortfolio, fetchSections,
@@ -39,8 +39,13 @@ const RISK_COLORS = {
 };
 
 function App() {
-  const [availableTickers, setAvailableTickers] = useState([]);
+  const [tickerMeta, setTickerMeta] = useState([]);
   const [selectedTickers, setSelectedTickers] = useState([]);
+
+  const availableTickers = useMemo(
+    () => tickerMeta.map(t => t.ticker),
+    [tickerMeta],
+  );
   const [portfolio, setPortfolio] = useState(null);
   const [filings, setFilings] = useState([]);
   const [sections, setSections] = useState([]);
@@ -53,8 +58,8 @@ function App() {
 
   useEffect(() => {
     fetchTickers()
-      .then(setAvailableTickers)
-      .catch(() => setAvailableTickers([]));
+      .then(setTickerMeta)
+      .catch(() => setTickerMeta([]));
     fetchClients()
       .then(setClients)
       .catch(() => setClients([]));
@@ -95,7 +100,7 @@ function App() {
 
   const handleRefreshAfterPipeline = useCallback(() => {
     fetchTickers()
-      .then(setAvailableTickers)
+      .then(setTickerMeta)
       .catch(() => {});
     if (selectedTickers.length) {
       loadAnalysis(selectedTickers);
@@ -146,7 +151,7 @@ function App() {
     <ErrorBoundary>
     <div className="app">
       <Sidebar
-        tickers={availableTickers}
+        tickerMeta={tickerMeta}
         selected={selectedTickers}
         onAnalyze={handleAnalyze}
         portfolioLas={portfolio?.portfolio_las}

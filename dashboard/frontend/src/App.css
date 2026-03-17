@@ -89,6 +89,34 @@ body {
 .ticker-item.selected { background: rgba(67,97,238,0.25); color: var(--color-sidebar-active); }
 .ticker-item input[type="checkbox"] { accent-color: var(--color-primary); }
 
+.sector-group { margin-bottom: 4px; }
+.sector-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  transition: background 0.15s;
+  user-select: none;
+}
+.sector-header:hover { background: rgba(255,255,255,0.06); }
+.sector-header input[type="checkbox"] { accent-color: var(--color-primary); }
+.sector-arrow { font-size: 9px; width: 10px; text-align: center; flex-shrink: 0; }
+.sector-name { flex: 1; }
+.sector-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+.sector-group .ticker-item { padding-left: 30px; }
+
 .sidebar-btn {
   width: 100%;
   padding: 10px;

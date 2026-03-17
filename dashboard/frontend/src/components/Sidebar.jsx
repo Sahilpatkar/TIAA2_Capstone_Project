@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const RISK_COLORS = {
   conservative: '#06d6a0',
@@ -7,7 +7,7 @@ const RISK_COLORS = {
 };
 
 function Sidebar({
-  tickers,
+  tickerMeta,
   selected,
   onAnalyze,
   portfolioLas,
@@ -17,7 +17,20 @@ function Sidebar({
   onNewClient,
   onEditClient,
 }) {
+  const tickers = useMemo(() => tickerMeta.map(t => t.ticker), [tickerMeta]);
+
+  const sectorGroups = useMemo(() => {
+    const groups = {};
+    for (const item of tickerMeta) {
+      const sector = item.sector || 'Other';
+      if (!groups[sector]) groups[sector] = [];
+      groups[sector].push(item.ticker);
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [tickerMeta]);
+
   const [localSelected, setLocalSelected] = useState(selected);
+  const [collapsedSectors, setCollapsedSectors] = useState({});
 
   useEffect(() => {
     if (activeClient) {
@@ -32,6 +45,20 @@ function Sidebar({
     setLocalSelected(prev =>
       prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]
     );
+  };
+
+  const toggleSector = (sector, sectorTickers) => {
+    if (activeClient) onSelectClient(null);
+    const allSelected = sectorTickers.every(t => localSelected.includes(t));
+    if (allSelected) {
+      setLocalSelected(prev => prev.filter(t => !sectorTickers.includes(t)));
+    } else {
+      setLocalSelected(prev => [...new Set([...prev, ...sectorTickers])]);
+    }
+  };
+
+  const toggleCollapse = (sector) => {
+    setCollapsedSectors(prev => ({ ...prev, [sector]: !prev[sector] }));
   };
 
   const selectAll = () => {
@@ -143,21 +170,47 @@ function Sidebar({
       </div>
 
       <div className="ticker-list">
-        {tickers.map(ticker => (
-          <div
-            key={ticker}
-            className={`ticker-item ${localSelected.includes(ticker) ? 'selected' : ''}`}
-            onClick={() => toggle(ticker)}
-          >
-            <input
-              type="checkbox"
-              checked={localSelected.includes(ticker)}
-              onChange={() => toggle(ticker)}
-              onClick={e => e.stopPropagation()}
-            />
-            {ticker}
-          </div>
-        ))}
+        {sectorGroups.map(([sector, sectorTickers]) => {
+          const collapsed = collapsedSectors[sector];
+          const selectedCount = sectorTickers.filter(t => localSelected.includes(t)).length;
+          const allSelected = selectedCount === sectorTickers.length;
+          const someSelected = selectedCount > 0 && !allSelected;
+
+          return (
+            <div key={sector} className="sector-group">
+              <div
+                className="sector-header"
+                onClick={() => toggleCollapse(sector)}
+              >
+                <span className="sector-arrow">{collapsed ? '\u25B6' : '\u25BC'}</span>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={el => { if (el) el.indeterminate = someSelected; }}
+                  onChange={() => toggleSector(sector, sectorTickers)}
+                  onClick={e => e.stopPropagation()}
+                />
+                <span className="sector-name">{sector}</span>
+                <span className="sector-count">{selectedCount}/{sectorTickers.length}</span>
+              </div>
+              {!collapsed && sectorTickers.map(ticker => (
+                <div
+                  key={ticker}
+                  className={`ticker-item ${localSelected.includes(ticker) ? 'selected' : ''}`}
+                  onClick={() => toggle(ticker)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={localSelected.includes(ticker)}
+                    onChange={() => toggle(ticker)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                  {ticker}
+                </div>
+              ))}
+            </div>
+          );
+        })}
         {tickers.length === 0 && (
           <p style={{ fontSize: 12, color: '#718096', padding: 8 }}>
             No tickers in database. Run the pipeline first.

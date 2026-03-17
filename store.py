@@ -172,7 +172,7 @@ _PRESET_PROFILES = [
         "tickers": ["AAPL", "MSFT", "AMGN", "CRM", "NKE", "GS", "DIS"],
     },
     {
-        "name": "Patricia Williams",
+        "name": "Sahil Patkar",
         "risk_tolerance": "conservative",
         "investment_goal": "income",
         "notes": "Focus on high-dividend-yield names for steady income generation.",

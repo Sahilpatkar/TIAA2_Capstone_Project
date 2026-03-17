@@ -48,7 +48,39 @@ CIK_TO_TICKER = {
 
 TICKER_TO_CIK = {v: k for k, v in CIK_TO_TICKER.items()}
 
-
+# Sector and industry classification for each ticker (GICS-style).
+TICKER_SECTOR_INDUSTRY = {
+    "MMM":  {"sector": "Industrials",             "industry": "Conglomerates"},
+    "AXP":  {"sector": "Financial Services",      "industry": "Credit Services"},
+    "AMGN": {"sector": "Healthcare",              "industry": "Drug Manufacturers"},
+    "AAPL": {"sector": "Technology",              "industry": "Consumer Electronics"},
+    "BA":   {"sector": "Industrials",             "industry": "Aerospace & Defense"},
+    "CAT":  {"sector": "Industrials",             "industry": "Farm & Heavy Construction Machinery"},
+    "CVX":  {"sector": "Energy",                  "industry": "Oil & Gas Integrated"},
+    "CSCO": {"sector": "Technology",              "industry": "Communication Equipment"},
+    "KO":   {"sector": "Consumer Defensive",      "industry": "Beverages — Non-Alcoholic"},
+    "DIS":  {"sector": "Communication Services",  "industry": "Entertainment"},
+    "DOW":  {"sector": "Basic Materials",         "industry": "Chemicals"},
+    "GS":   {"sector": "Financial Services",      "industry": "Capital Markets"},
+    "HD":   {"sector": "Consumer Cyclical",       "industry": "Home Improvement Retail"},
+    "HON":  {"sector": "Industrials",             "industry": "Conglomerates"},
+    "IBM":  {"sector": "Technology",              "industry": "Information Technology Services"},
+    "INTC": {"sector": "Technology",              "industry": "Semiconductors"},
+    "JNJ":  {"sector": "Healthcare",              "industry": "Drug Manufacturers"},
+    "JPM":  {"sector": "Financial Services",      "industry": "Banks — Diversified"},
+    "MCD":  {"sector": "Consumer Cyclical",       "industry": "Restaurants"},
+    "MRK":  {"sector": "Healthcare",              "industry": "Drug Manufacturers"},
+    "MSFT": {"sector": "Technology",              "industry": "Software — Infrastructure"},
+    "NKE":  {"sector": "Consumer Cyclical",       "industry": "Footwear & Accessories"},
+    "PG":   {"sector": "Consumer Defensive",      "industry": "Household & Personal Products"},
+    "CRM":  {"sector": "Technology",              "industry": "Software — Application"},
+    "TRV":  {"sector": "Financial Services",      "industry": "Insurance — Property & Casualty"},
+    "UNH":  {"sector": "Healthcare",              "industry": "Healthcare Plans"},
+    "VZ":   {"sector": "Communication Services",  "industry": "Telecom Services"},
+    "V":    {"sector": "Financial Services",      "industry": "Credit Services"},
+    "WBA":  {"sector": "Healthcare",              "industry": "Pharmaceutical Retailers"},
+    "WMT":  {"sector": "Consumer Defensive",      "industry": "Discount Stores"},
+}
 
 ITEM_SECTIONS = [
     "item_1",

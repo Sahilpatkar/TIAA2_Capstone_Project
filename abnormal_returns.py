@@ -9,6 +9,8 @@ Usage:
 """
 
 import argparse
+import contextlib
+import io
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -29,7 +31,8 @@ def _trading_days_around(filed_date: str, buffer_calendar_days: int = None) -> t
 
 def _daily_returns(ticker: str, start: str, end: str) -> pd.Series:
     """Fetch adjusted close prices from Yahoo Finance and compute daily returns."""
-    data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    with contextlib.redirect_stderr(io.StringIO()):
+        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
     if data.empty:
         return pd.Series(dtype=float)
     close = data["Close"].squeeze()

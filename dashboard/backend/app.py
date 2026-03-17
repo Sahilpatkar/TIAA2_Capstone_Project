@@ -16,24 +16,23 @@ from dotenv import load_dotenv
 from flask import Flask, request, Response
 from flask_cors import CORS
 
-# Add project root so we can import pipeline modules
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, PROJECT_ROOT)
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import config  # noqa: E402
-from store import LASStore  # noqa: E402
+import config  
+from store import LASStore  
 from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation  # noqa: E402
-from chat import handle_chat  # noqa: E402
-from run_pipeline import run as run_pipeline  # noqa: E402
+from chat import handle_chat  
+from run_pipeline import run as run_pipeline  
 
 app = Flask(__name__)
 CORS(app)
 
 
 def _sanitize(obj):
-    """Replace NaN/Infinity with None so JSON serialization is valid."""
+    
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
     if isinstance(obj, dict):
@@ -44,7 +43,7 @@ def _sanitize(obj):
 
 
 def json_response(data, status=200):
-    """Return a JSON response with NaN values replaced by null."""
+    
     body = json.dumps(_sanitize(data))
     return Response(body, status=status, mimetype="application/json")
 
@@ -53,9 +52,8 @@ def _get_db():
     return LASStore()
 
 
-# ------------------------------------------------------------------
-# GET /api/tickers  –  distinct tickers in the DB
-# ------------------------------------------------------------------
+
+# GET /api/tickers  –  distinct tickers in the DB, with sector/industry metadata
 @app.route("/api/tickers")
 def api_tickers():
     db = _get_db()
@@ -64,14 +62,21 @@ def api_tickers():
         if df.empty:
             return json_response([])
         tickers = sorted(df["ticker"].dropna().unique().tolist())
-        return json_response(tickers)
+        result = []
+        for t in tickers:
+            meta = config.TICKER_SECTOR_INDUSTRY.get(t, {})
+            result.append({
+                "ticker": t,
+                "sector": meta.get("sector", "Other"),
+                "industry": meta.get("industry", "Other"),
+            })
+        return json_response(result)
     finally:
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/filings?tickers=AAPL,JPM  –  all filings (optional filter)
-# ------------------------------------------------------------------
 @app.route("/api/filings")
 def api_filings():
     db = _get_db()
@@ -103,9 +108,8 @@ def api_filings():
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/filings/<ticker>  –  filings for one ticker
-# ------------------------------------------------------------------
 @app.route("/api/filings/<ticker>")
 def api_filings_by_ticker(ticker):
     db = _get_db()
@@ -131,9 +135,8 @@ def api_filings_by_ticker(ticker):
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/portfolio?tickers=AAPL,JPM  –  portfolio LAS aggregation
-# ------------------------------------------------------------------
 @app.route("/api/portfolio")
 def api_portfolio():
     tickers_param = request.args.get("tickers", "")
@@ -149,9 +152,8 @@ def api_portfolio():
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/sections?tickers=AAPL&top=5  –  high-impact sections
-# ------------------------------------------------------------------
 @app.route("/api/sections")
 def api_sections():
     tickers_param = request.args.get("tickers", "")
@@ -169,9 +171,8 @@ def api_sections():
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/risk-narrative?tickers=AAPL,JPM  –  LLM risk summary
-# ------------------------------------------------------------------
 @app.route("/api/risk-narrative")
 def api_risk_narrative():
     tickers_param = request.args.get("tickers", "")
@@ -194,9 +195,8 @@ def api_risk_narrative():
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # GET /api/filing/<cik>/<accession>/sections  –  full section text
-# ------------------------------------------------------------------
 @app.route("/api/filing/<int:cik>/<accession>/sections")
 def api_filing_sections(cik, accession):
     db = _get_db()
@@ -228,9 +228,8 @@ def api_filing_sections(cik, accession):
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # Client profile CRUD
-# ------------------------------------------------------------------
 @app.route("/api/clients")
 def api_clients():
     db = _get_db()
@@ -291,9 +290,8 @@ def api_delete_client(client_id):
         db.close()
 
 
-# ------------------------------------------------------------------
+
 # POST /api/chat  –  chat with data
-# ------------------------------------------------------------------
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     body = request.get_json(force=True)
@@ -319,9 +317,9 @@ def api_chat():
     })
 
 
-# ------------------------------------------------------------------
+
 # Pipeline job runner (background thread)
-# ------------------------------------------------------------------
+
 _pipeline_jobs: dict[str, dict] = {}
 _pipeline_lock = threading.Lock()
 
@@ -382,7 +380,7 @@ def api_pipeline_status(job_id):
     return json_response({"job_id": job_id, **job})
 
 
-# ------------------------------------------------------------------
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
