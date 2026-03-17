@@ -14,6 +14,8 @@ Usage:
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -274,12 +276,17 @@ def run(
 
             car_val = None
             if filed_date and ticker != "?":
-                print(f"  [returns] CAR for {ticker} filed {filed_date}...")
+                print(f"  [returns] CAR for {ticker} filed {filed_date}...", end=" ")
                 try:
-                    car_result = compute_car(ticker, filed_date)
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        car_result = compute_car(ticker, filed_date)
                     car_val = car_result.get("car")
+                    if car_val is None:
+                        print("(no price data; skipped)")
+                    else:
+                        print(f"CAR={car_val:.4f}")
                 except Exception as e:
-                    print(f"    CAR error: {e}")
+                    print(f"error: {e}")
 
             cleaned_text_path = None
             if basename:
