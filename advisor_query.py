@@ -24,10 +24,8 @@ import config
 from store import LASStore
 
 
-# ---------------------------------------------------------------------------
-# 1. Portfolio LAS aggregation
-# ---------------------------------------------------------------------------
 
+# 1. Portfolio LAS aggregation
 def aggregate_las(
     tickers: list[str],
     weights: dict[str, float] | None = None,
@@ -89,10 +87,7 @@ def aggregate_las(
             db.close()
 
 
-# ---------------------------------------------------------------------------
 # 2. High-impact section retrieval
-# ---------------------------------------------------------------------------
-
 def retrieve_high_impact_sections(
     tickers: list[str],
     top_n: int = 5,
