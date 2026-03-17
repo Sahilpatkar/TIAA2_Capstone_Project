@@ -18,11 +18,6 @@ import pandas as pd
 
 import config
 
-
-# ---------------------------------------------------------------------------
-# Normalisation helpers
-# ---------------------------------------------------------------------------
-
 def _rank_normalize(series: pd.Series) -> pd.Series:
     """Cross-sectional rank percentile in [0, 1]."""
     return series.rank(pct=True, na_option="keep")
@@ -44,11 +39,6 @@ def normalize(series: pd.Series, method: str | None = None) -> pd.Series:
     if method == "zscore":
         return _zscore_normalize(series)
     raise ValueError(f"Unknown normalization method: {method}")
-
-
-# ---------------------------------------------------------------------------
-# LAS computation
-# ---------------------------------------------------------------------------
 
 def compute_las(filings_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -99,11 +89,6 @@ def compute_section_las(section_changes: list[dict]) -> list[dict]:
             "section_las": round(float(ranked.iloc[i]), 6) if pd.notna(ranked.iloc[i]) else None,
         })
     return result
-
-
-# ---------------------------------------------------------------------------
-# Demo / CLI
-# ---------------------------------------------------------------------------
 
 def main():
     demo = pd.DataFrame({

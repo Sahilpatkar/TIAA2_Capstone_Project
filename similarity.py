@@ -22,9 +22,9 @@ from embeddings import build_vectors, load_cleaned_filings, tokenize_and_lemmati
 import config
 
 
-# ---------------------------------------------------------------------------
+# 
 # Filing metadata extraction
-# ---------------------------------------------------------------------------
+# 
 
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 
@@ -57,9 +57,9 @@ def _parse_date(date_str: str) -> datetime | None:
         return None
 
 
-# ---------------------------------------------------------------------------
+# 
 # Pairing
-# ---------------------------------------------------------------------------
+# 
 
 def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
     """
@@ -94,9 +94,9 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
     return pairs
 
 
-# ---------------------------------------------------------------------------
+# 
 # Similarity measures
-# ---------------------------------------------------------------------------
+# 
 
 def cosine_sim(v1, v2) -> float:
     """Cosine similarity between two sparse or dense vectors."""
@@ -115,9 +115,9 @@ def jaccard_sim(text1: str, text2: str) -> float:
     return len(intersection) / len(union) if union else 1.0
 
 
-# ---------------------------------------------------------------------------
+# 
 # Main computation
-# ---------------------------------------------------------------------------
+# 
 
 def compute_similarity(entity_dir: str) -> list[dict]:
     """
@@ -193,9 +193,9 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     return results
 
 
-# ---------------------------------------------------------------------------
+# 
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Compute filing similarity and change intensity")

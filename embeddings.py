@@ -69,9 +69,9 @@ _stop_words = _get_stop_words()
 _lemmatizer = _get_lemmatizer()
 
 
-# ---------------------------------------------------------------------------
+
 # Text pre-processing (aligned with PythonPractice10 notebook)
-# ---------------------------------------------------------------------------
+
 
 def tokenize_and_lemmatize(text: str, remove_stopwords: bool = True) -> str:
     """Lowercase, tokenize, lemmatize, optionally drop stopwords.
@@ -84,9 +84,9 @@ def tokenize_and_lemmatize(text: str, remove_stopwords: bool = True) -> str:
     return " ".join(tokens)
 
 
-# ---------------------------------------------------------------------------
+
 # Loading cleaned data
-# ---------------------------------------------------------------------------
+
 
 def load_cleaned_filings(entity_dir: str) -> list[dict]:
     """Load all *_cleaned.json files under entity_dir/cleaned/."""
@@ -107,9 +107,9 @@ def load_cleaned_filings(entity_dir: str) -> list[dict]:
     return filings
 
 
-# ---------------------------------------------------------------------------
+
 # Vectorisation
-# ---------------------------------------------------------------------------
+
 
 def build_vectors(
     entity_dir: str,
@@ -187,9 +187,9 @@ def save_vectors(entity_dir: str, vectors_result: dict) -> str:
     return out_dir
 
 
-# ---------------------------------------------------------------------------
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Build TF / TF-IDF vectors for cleaned 10-K text")

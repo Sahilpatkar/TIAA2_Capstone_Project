@@ -27,9 +27,9 @@ if _USE_PG:
     import psycopg2.extras
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Schema DDL (PostgreSQL flavour)
-# ---------------------------------------------------------------------------
+
 
 _PG_CREATE_FILINGS = """
 CREATE TABLE IF NOT EXISTS filings (
@@ -86,9 +86,9 @@ CREATE TABLE IF NOT EXISTS client_portfolios (
 );
 """
 
-# ---------------------------------------------------------------------------
+
 # Schema DDL (SQLite flavour)
-# ---------------------------------------------------------------------------
+
 
 _SQLITE_CREATE_FILINGS = """
 CREATE TABLE IF NOT EXISTS filings (
@@ -145,9 +145,8 @@ CREATE TABLE IF NOT EXISTS client_portfolios (
 );
 """
 
-# ---------------------------------------------------------------------------
+
 # Preset client profiles
-# ---------------------------------------------------------------------------
 
 _PRESET_PROFILES = [
     {
