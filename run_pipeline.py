@@ -41,9 +41,8 @@ from las import compute_las, compute_section_las
 from store import LASStore, _normalize_accession
 
 
-# ---------------------------------------------------------------------------
+
 # Step 1: Pull filings from SEC
-# ---------------------------------------------------------------------------
 
 def pull_filings(cik: int, max_filings: int | None = None) -> tuple[str, list[dict]]:
     """Download 10-K filings for *cik* (reuses document_pull functions).
@@ -84,10 +83,8 @@ def pull_filings(cik: int, max_filings: int | None = None) -> tuple[str, list[di
     return out_dir, tenks
 
 
-# ---------------------------------------------------------------------------
-# Locate entity dir if skipping pull
-# ---------------------------------------------------------------------------
 
+# Locate entity dir if skipping pull
 def find_entity_dir(cik: int) -> str | None:
     """Find the entityName_cik folder on disk for a given CIK."""
     cik_suffix = f"_{cik10(cik)}"
@@ -128,9 +125,8 @@ def _filing_metadata_from_dir(entity_dir: str, cik: int) -> list[dict]:
     return filings
 
 
-# ---------------------------------------------------------------------------
+
 # Resolve filed_date from SEC metadata (best-effort)
-# ---------------------------------------------------------------------------
 
 def _enrich_filed_dates(cik: int, filings_meta: list[dict]) -> list[dict]:
     """Try to fill in filed_date from SEC submissions API."""
@@ -153,9 +149,9 @@ def _enrich_filed_dates(cik: int, filings_meta: list[dict]) -> list[dict]:
     return filings_meta
 
 
-# ---------------------------------------------------------------------------
+# 
 # Main pipeline
-# ---------------------------------------------------------------------------
+# 
 
 def run(
     ciks: list[int],
@@ -361,9 +357,9 @@ def run(
     db.close()
 
 
-# ---------------------------------------------------------------------------
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run the LazyPrices pipeline end-to-end")
