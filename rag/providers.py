@@ -19,9 +19,9 @@ sys.path.insert(0, PROJECT_ROOT)
 import config  # noqa: E402
 
 
-# ===================================================================
+# 
 # Embedding Provider
-# ===================================================================
+# 
 
 class EmbeddingProvider(ABC):
     @abstractmethod
@@ -70,9 +70,9 @@ class OpenAIEmbeddings(EmbeddingProvider):
         return self._dim
 
 
-# ===================================================================
+# 
 # LLM Provider
-# ===================================================================
+# 
 
 class LLMProvider(ABC):
     @abstractmethod
@@ -98,9 +98,9 @@ class OpenAIChat(LLMProvider):
         return resp.choices[0].message.content.strip()
 
 
-# ===================================================================
+# 
 # Vector Store Provider
-# ===================================================================
+# 
 
 class VectorStoreProvider(ABC):
     @abstractmethod
@@ -194,9 +194,7 @@ class ChromaVectorStore(VectorStoreProvider):
             pass
 
 
-# ===================================================================
 # Factory
-# ===================================================================
 
 def get_embedding_provider() -> EmbeddingProvider:
     provider = getattr(config, "RAG_EMBEDDING_PROVIDER", "openai")

@@ -70,3 +70,12 @@ export function fetchRiskNarrative(tickers) {
     params: { tickers: tickers.join(',') },
   }).then(r => r.data);
 }
+
+export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippet_new }) {
+  return API.post('/sections/summarize', {
+    ticker,
+    section,
+    snippet_old,
+    snippet_new,
+  }).then(r => r.data);
+}

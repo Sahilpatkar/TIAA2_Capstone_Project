@@ -64,7 +64,11 @@ def aggregate_las(
                 "report_date": latest.get("report_date"),
                 "las": latest.get("las"),
                 "change_intensity": latest.get("change_intensity"),
+                "attention_proxy": latest.get("attention_proxy"),
                 "car": latest.get("car"),
+                "norm_change": latest.get("norm_change"),
+                "norm_attention": latest.get("norm_attention"),
+                "norm_car": latest.get("norm_car"),
             })
 
         scored = [h for h in holdings if h.get("las") is not None]
@@ -81,7 +85,11 @@ def aggregate_las(
 
         holdings.sort(key=lambda h: h.get("las") or float("-inf"), reverse=True)
 
-        return {"portfolio_las": round(port_las, 6), "holdings": holdings}
+        return {
+            "portfolio_las": round(port_las, 6),
+            "holdings": holdings,
+            "las_weights": config.LAS_WEIGHTS,
+        }
     finally:
         if own_db:
             db.close()
@@ -121,15 +129,20 @@ def retrieve_high_impact_sections(
                 section_texts = data.get("sections", {})
 
             for sc in changes:
-                text = section_texts.get(sc["section"], "")
-                snippet = text[:500] + "..." if len(text) > 500 else text
+                snippet_new = sc.get("snippet_new") or ""
+                snippet_old = sc.get("snippet_old") or ""
+                if not snippet_new:
+                    text = section_texts.get(sc["section"], "")
+                    snippet_new = text[:500] + "..." if len(text) > 500 else text
                 sections.append({
                     "ticker": ticker,
                     "entity_name": latest.get("entity_name"),
                     "report_date": latest.get("report_date"),
                     "section": sc["section"],
                     "change_intensity": sc.get("change_intensity"),
-                    "snippet": snippet,
+                    "snippet": snippet_new,
+                    "snippet_new": snippet_new,
+                    "snippet_old": snippet_old,
                 })
 
         sections.sort(key=lambda s: s.get("change_intensity") or 0, reverse=True)
@@ -139,9 +152,9 @@ def retrieve_high_impact_sections(
             db.close()
 
 
-# ---------------------------------------------------------------------------
+
 # 3. Structured explanation (LLM or template fallback)
-# ---------------------------------------------------------------------------
+
 
 def _template_narrative(portfolio: dict, high_impact: list[dict]) -> str:
     """Plain-text summary when no LLM API key is available."""
@@ -220,9 +233,90 @@ def generate_explanation(portfolio: dict, high_impact: list[dict]) -> str:
     return _llm_narrative(portfolio, high_impact)
 
 
-# ---------------------------------------------------------------------------
+# 4. Per-section change summary (LLM or template)
+
+def summarize_section_change(
+    ticker: str,
+    section: str,
+    snippet_old: str,
+    snippet_new: str,
+) -> dict:
+    """Return ``{"summary": str, "is_template": bool}`` describing what changed."""
+    if not snippet_old and not snippet_new:
+        return {"summary": "No text available for comparison.", "is_template": True}
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "is_template": True,
+        }
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "is_template": True,
+        }
+
+    client = OpenAI(api_key=api_key)
+    pretty = section.replace("_", " ").title()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a financial analyst assistant. Given old and new text "
+                "from a specific section of an SEC 10-K filing, write a brief "
+                "(2-4 sentence) plain-English summary of what materially changed. "
+                "Focus on substance — new risks, removed disclosures, changed "
+                "figures, product launches — not formatting differences."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Ticker: {ticker}\nSection: {pretty}\n\n"
+                f"--- PRIOR YEAR ---\n{snippet_old}\n\n"
+                f"--- CURRENT YEAR ---\n{snippet_new}"
+            ),
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=300,
+        )
+        return {
+            "summary": response.choices[0].message.content.strip(),
+            "is_template": False,
+        }
+    except Exception:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "is_template": True,
+        }
+
+
+def _template_section_summary(
+    ticker: str, section: str, snippet_old: str, snippet_new: str,
+) -> str:
+    pretty = section.replace("_", " ").title()
+    if not snippet_old:
+        return f"Prior-year text for {ticker} {pretty} is not available (re-run pipeline to capture it)."
+    if not snippet_new:
+        return f"Current-year text for {ticker} {pretty} is not available."
+    return (
+        f"The {pretty} section of {ticker}'s 10-K changed between filing periods. "
+        f"Set OPENAI_API_KEY for an AI-generated summary of the differences."
+    )
+
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Advisor portfolio LAS query")

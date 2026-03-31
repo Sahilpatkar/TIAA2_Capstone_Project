@@ -70,6 +70,43 @@ def compute_las(filings_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def weighted_change_intensity(
+    section_changes: list[dict],
+    weights: dict[str, float] | None = None,
+) -> float | None:
+    """Compute a weighted average of per-section change intensities.
+
+    *section_changes* is the list produced by ``similarity.compute_similarity``
+    — each element must have ``"section"`` and ``"change_intensity"`` keys.
+
+    *weights* defaults to ``config.SECTION_WEIGHTS``.  Sections not present in
+    the weights dict are ignored.  Returns ``None`` when no usable data exists
+    (caller should fall back to the document-level change_intensity).
+    """
+    if not section_changes:
+        return None
+
+    w = weights if weights is not None else config.SECTION_WEIGHTS
+    total_w = 0.0
+    total_ci = 0.0
+
+    for sc in section_changes:
+        sec_key = sc.get("section")
+        ci = sc.get("change_intensity")
+        if sec_key is None or ci is None:
+            continue
+        sec_w = w.get(sec_key, 0.0)
+        if sec_w <= 0:
+            continue
+        total_w += sec_w
+        total_ci += sec_w * ci
+
+    if total_w == 0:
+        return None
+
+    return total_ci / total_w
+
+
 def compute_section_las(section_changes: list[dict]) -> list[dict]:
     """
     Rank sections by change_intensity and assign a section-level LAS proxy.

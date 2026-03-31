@@ -19,7 +19,17 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity as sk_cosine
 
 from embeddings import build_vectors, load_cleaned_filings, tokenize_and_lemmatize
+from numeric_change import compute_numerical_divergence
 import config
+
+_SNIPPET_MAX = 500
+
+
+def _snippet(text: str, max_len: int = _SNIPPET_MAX) -> str:
+    """Truncate *text* to *max_len* chars, appending '...' when trimmed."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
 
 
 # 
@@ -119,10 +129,28 @@ def jaccard_sim(text1: str, text2: str) -> float:
 # Main computation
 # 
 
+def _blend_change_intensity(
+    text_sim: float | None,
+    num_div: float,
+    alpha: float,
+) -> float | None:
+    """Combine text-based change with numerical divergence.
+
+    change_intensity = alpha * (1 - text_sim) + (1 - alpha) * num_div
+    """
+    if text_sim is None:
+        return None
+    text_change = 1.0 - text_sim
+    return alpha * text_change + (1.0 - alpha) * num_div
+
+
 def compute_similarity(entity_dir: str) -> list[dict]:
     """
     Compute document-level and section-level similarity for all
     consecutive filing pairs in *entity_dir*.
+
+    The change_intensity is a hybrid of text similarity and numerical
+    divergence, controlled by ``config.NUMERIC_CHANGE_ALPHA``.
     """
     filings = load_cleaned_filings(entity_dir)
     cleaned_dir = os.path.join(entity_dir, "cleaned")
@@ -133,6 +161,8 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     vec_result = build_vectors(entity_dir, use_tfidf=False, remove_stopwords=True)
     doc_vectors = vec_result["doc_vectors"]
     section_vectors = vec_result["section_vectors"]
+
+    alpha = config.NUMERIC_CHANGE_ALPHA
 
     pairs = pair_filings(filings)
     if not pairs and len(filings) >= 2:
@@ -150,7 +180,10 @@ def compute_similarity(entity_dir: str) -> list[dict]:
         jac = jaccard_sim(current["full_text"], prior["full_text"])
 
         primary_sim = cos if cos is not None else jac
-        change_intensity = 1.0 - primary_sim if primary_sim is not None else None
+        doc_num_div = compute_numerical_divergence(
+            current["full_text"], prior["full_text"],
+        )
+        change_intensity = _blend_change_intensity(primary_sim, doc_num_div, alpha)
 
         # Section-level changes
         section_changes = []
@@ -170,11 +203,20 @@ def compute_similarity(entity_dir: str) -> list[dict]:
 
             sec_jac = jaccard_sim(cur_sections[sec_key], pri_sections[sec_key])
             sec_sim = sec_cos if sec_cos is not None else sec_jac
+
+            sec_num_div = compute_numerical_divergence(
+                cur_sections[sec_key], pri_sections[sec_key],
+            )
+            sec_ci = _blend_change_intensity(sec_sim, sec_num_div, alpha)
+
             section_changes.append({
                 "section": sec_key,
                 "similarity_cosine": round(sec_cos, 6) if sec_cos is not None else None,
                 "similarity_jaccard": round(sec_jac, 6),
-                "change_intensity": round(1.0 - sec_sim, 6) if sec_sim is not None else None,
+                "numerical_divergence": round(sec_num_div, 6),
+                "change_intensity": round(sec_ci, 6) if sec_ci is not None else None,
+                "snippet_old": _snippet(pri_sections[sec_key]),
+                "snippet_new": _snippet(cur_sections[sec_key]),
             })
 
         section_changes.sort(key=lambda s: s["change_intensity"] or 0, reverse=True)
@@ -186,6 +228,7 @@ def compute_similarity(entity_dir: str) -> list[dict]:
             "prior_report_date": prior.get("_report_date"),
             "similarity_cosine": round(cos, 6) if cos is not None else None,
             "similarity_jaccard": round(jac, 6),
+            "numerical_divergence": round(doc_num_div, 6),
             "change_intensity": round(change_intensity, 6) if change_intensity is not None else None,
             "section_changes": section_changes,
         })

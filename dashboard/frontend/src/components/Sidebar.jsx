@@ -31,6 +31,18 @@ function Sidebar({
 
   const [localSelected, setLocalSelected] = useState(selected);
   const [collapsedSectors, setCollapsedSectors] = useState({});
+  const [search, setSearch] = useState('');
+
+  const filteredSectorGroups = useMemo(() => {
+    if (!search.trim()) return sectorGroups;
+    const q = search.trim().toLowerCase();
+    return sectorGroups
+      .map(([sector, sectorTickers]) => [
+        sector,
+        sectorTickers.filter(t => t.toLowerCase().includes(q))
+      ])
+      .filter(([, sectorTickers]) => sectorTickers.length > 0);
+  }, [sectorGroups, search]);
 
   useEffect(() => {
     if (activeClient) {
@@ -169,9 +181,17 @@ function Sidebar({
         </button>
       </div>
 
+      <input
+        className="ticker-search"
+        type="text"
+        placeholder="Search tickers..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+
       <div className="ticker-list">
-        {sectorGroups.map(([sector, sectorTickers]) => {
-          const collapsed = collapsedSectors[sector];
+        {filteredSectorGroups.map(([sector, sectorTickers]) => {
+          const collapsed = search.trim() ? false : collapsedSectors[sector];
           const selectedCount = sectorTickers.filter(t => localSelected.includes(t)).length;
           const allSelected = selectedCount === sectorTickers.length;
           const someSelected = selectedCount > 0 && !allSelected;

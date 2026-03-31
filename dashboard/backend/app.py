@@ -23,7 +23,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 import config  
 from store import LASStore  
-from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation  # noqa: E402
+from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
 from chat import handle_chat  
 from run_pipeline import run as run_pipeline  
 
@@ -170,6 +170,19 @@ def api_sections():
     finally:
         db.close()
 
+
+# POST /api/sections/summarize  –  AI summary of what changed in one section
+@app.route("/api/sections/summarize", methods=["POST"])
+def api_sections_summarize():
+    body = request.get_json(silent=True) or {}
+    ticker = body.get("ticker", "")
+    section = body.get("section", "")
+    snippet_old = body.get("snippet_old", "")
+    snippet_new = body.get("snippet_new", "")
+    if not ticker or not section:
+        return json_response({"error": "ticker and section are required"}, 400)
+    result = summarize_section_change(ticker, section, snippet_old, snippet_new)
+    return json_response(result)
 
 
 # GET /api/risk-narrative?tickers=AAPL,JPM  –  LLM risk summary

@@ -41,10 +41,14 @@ CREATE TABLE IF NOT EXISTS filings (
     ticker           TEXT,
     similarity_cosine  DOUBLE PRECISION,
     similarity_jaccard DOUBLE PRECISION,
+    numerical_divergence DOUBLE PRECISION,
     change_intensity   DOUBLE PRECISION,
     attention_proxy    DOUBLE PRECISION,
     car                DOUBLE PRECISION,
     las                DOUBLE PRECISION,
+    norm_change        DOUBLE PRECISION,
+    norm_attention     DOUBLE PRECISION,
+    norm_car           DOUBLE PRECISION,
     section_changes_json TEXT,
     cleaned_text_path    TEXT,
     PRIMARY KEY (cik, accession)
@@ -100,10 +104,14 @@ CREATE TABLE IF NOT EXISTS filings (
     ticker           TEXT,
     similarity_cosine  REAL,
     similarity_jaccard REAL,
+    numerical_divergence REAL,
     change_intensity   REAL,
     attention_proxy    REAL,
     car                REAL,
     las                REAL,
+    norm_change        REAL,
+    norm_attention     REAL,
+    norm_car           REAL,
     section_changes_json TEXT,
     cleaned_text_path    TEXT,
     PRIMARY KEY (cik, accession)
@@ -202,6 +210,7 @@ class LASStore:
             self._conn.row_factory = sqlite3.Row
             self._init_sqlite_schema()
 
+        self._migrate_norm_columns()
         self._deduplicate_filings()
         self._seed_presets()
 
@@ -261,6 +270,18 @@ class LASStore:
         self._conn.execute(_SQLITE_CREATE_CLIENTS)
         self._conn.execute(_SQLITE_CREATE_CLIENT_PORTFOLIOS)
         self._conn.commit()
+
+    # -- add norm columns migration (idempotent) --
+
+    def _migrate_norm_columns(self) -> None:
+        col_type = "DOUBLE PRECISION" if self._pg else "REAL"
+        for col in ("norm_change", "norm_attention", "norm_car", "numerical_divergence"):
+            try:
+                self._execute(f"ALTER TABLE filings ADD COLUMN {col} {col_type}")
+                self._commit()
+            except Exception:
+                if self._pg:
+                    self._conn.rollback()
 
     # -- dedup migration (idempotent) --
 
@@ -339,10 +360,14 @@ class LASStore:
             row.get("ticker"),
             row.get("similarity_cosine"),
             row.get("similarity_jaccard"),
+            row.get("numerical_divergence"),
             row.get("change_intensity"),
             row.get("attention_proxy"),
             row.get("car"),
             row.get("las"),
+            row.get("norm_change"),
+            row.get("norm_attention"),
+            row.get("norm_car"),
             section_json,
             row.get("cleaned_text_path"),
         )
@@ -352,9 +377,11 @@ class LASStore:
                 """
                 INSERT INTO filings
                     (cik, entity_name, accession, filed_date, report_date, ticker,
-                     similarity_cosine, similarity_jaccard, change_intensity,
-                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     similarity_cosine, similarity_jaccard, numerical_divergence,
+                     change_intensity, attention_proxy, car, las,
+                     norm_change, norm_attention, norm_car,
+                     section_changes_json, cleaned_text_path)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (cik, accession) DO UPDATE SET
                     entity_name = EXCLUDED.entity_name,
                     filed_date = EXCLUDED.filed_date,
@@ -362,10 +389,14 @@ class LASStore:
                     ticker = EXCLUDED.ticker,
                     similarity_cosine = EXCLUDED.similarity_cosine,
                     similarity_jaccard = EXCLUDED.similarity_jaccard,
+                    numerical_divergence = EXCLUDED.numerical_divergence,
                     change_intensity = EXCLUDED.change_intensity,
                     attention_proxy = EXCLUDED.attention_proxy,
                     car = EXCLUDED.car,
                     las = EXCLUDED.las,
+                    norm_change = EXCLUDED.norm_change,
+                    norm_attention = EXCLUDED.norm_attention,
+                    norm_car = EXCLUDED.norm_car,
                     section_changes_json = EXCLUDED.section_changes_json,
                     cleaned_text_path = EXCLUDED.cleaned_text_path
                 """,
@@ -376,9 +407,11 @@ class LASStore:
                 """
                 INSERT OR REPLACE INTO filings
                     (cik, entity_name, accession, filed_date, report_date, ticker,
-                     similarity_cosine, similarity_jaccard, change_intensity,
-                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     similarity_cosine, similarity_jaccard, numerical_divergence,
+                     change_intensity, attention_proxy, car, las,
+                     norm_change, norm_attention, norm_car,
+                     section_changes_json, cleaned_text_path)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 params,
             )

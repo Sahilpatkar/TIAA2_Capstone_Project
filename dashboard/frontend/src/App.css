@@ -69,6 +69,41 @@ body {
   margin-bottom: 8px;
   color: var(--color-text-muted);
 }
+.ticker-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.06);
+  color: var(--color-sidebar-active);
+  font-size: 13px;
+  font-family: var(--font);
+  outline: none;
+  margin-bottom: 10px;
+  transition: border-color 0.15s;
+}
+.ticker-search:focus {
+  border-color: var(--color-primary);
+}
+.ticker-search::placeholder {
+  color: var(--color-text-muted);
+}
+.modal-ticker-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--color-text);
+  outline: none;
+  margin-bottom: 8px;
+  transition: border-color 0.15s;
+  background: var(--color-surface);
+}
+.modal-ticker-search:focus {
+  border-color: var(--color-primary);
+}
 .ticker-list {
   flex: 1;
   overflow-y: auto;
@@ -299,6 +334,78 @@ body {
 .process-all-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ---- Holdings Table ---- */
+.holdings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.holdings-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--color-border);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: help;
+}
+.holdings-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.holdings-table tr:last-child td { border-bottom: none; }
+.holdings-table tr:hover td { background: rgba(67,97,238,0.03); }
+.holdings-table .ht-ticker { font-weight: 700; width: 50px; }
+.holdings-table .ht-name { color: var(--color-text-muted); }
+.holdings-table .ht-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  cursor: help;
+}
+
+/* ---- Column Tooltip ---- */
+.col-tip {
+  position: relative;
+  cursor: help;
+}
+th .col-tip {
+  border-bottom: 1px dotted currentColor;
+}
+.col-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1f36;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  width: max-content;
+  max-width: 240px;
+  line-height: 1.5;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.col-tip:hover::after {
+  opacity: 1;
+  visibility: visible;
 }
 
 /* ---- Charts ---- */
@@ -599,6 +706,70 @@ body {
   white-space: pre-wrap;
   max-height: 200px;
   overflow-y: auto;
+}
+.section-expanded {
+  padding: 0 16px 16px;
+}
+.section-summary-wrap {
+  margin-bottom: 12px;
+}
+.section-summary {
+  background: rgba(67,97,238,0.04);
+  border-left: 3px solid var(--color-primary);
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+.section-summary p {
+  margin: 0;
+}
+.section-summary-loading {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+.section-summary-unavailable {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+  background: none;
+  border-left: none;
+  padding: 4px 0;
+}
+.section-diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.section-diff-pane {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.section-diff-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  background: var(--color-border);
+  color: var(--color-text-muted);
+}
+.section-diff-text {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.section-diff-na {
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 /* ---- Chat Panel ---- */

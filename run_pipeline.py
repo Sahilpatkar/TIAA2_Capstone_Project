@@ -37,7 +37,7 @@ from embeddings import build_vectors, save_vectors
 from similarity import compute_similarity
 from attention_proxy import get_attention_proxy
 from abnormal_returns import compute_car, resolve_ticker
-from las import compute_las, compute_section_las
+from las import compute_las, compute_section_las, weighted_change_intensity
 from store import LASStore, _normalize_accession
 
 
@@ -268,7 +268,18 @@ def run(
 
             sr = sim_lookup.get(basename, {})
 
-            attn = get_attention_proxy(cik, accession)
+            attn = None
+            if filed_date and ticker != "?":
+                print(f"  [attention] Volume ratio for {ticker} filed {filed_date}...", end=" ")
+                try:
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        attn = get_attention_proxy(ticker, filed_date)
+                    if attn is None:
+                        print("(no volume data; skipped)")
+                    else:
+                        print(f"ratio={attn:.4f}")
+                except Exception as e:
+                    print(f"error: {e}")
 
             car_val = None
             if filed_date and ticker != "?":
@@ -290,6 +301,10 @@ def run(
                 if os.path.exists(candidate):
                     cleaned_text_path = candidate
 
+            sec_changes = sr.get("section_changes", [])
+            w_ci = weighted_change_intensity(sec_changes)
+            ci = w_ci if w_ci is not None else sr.get("change_intensity")
+
             rows_for_las.append({
                 "cik": cik,
                 "entity_name": entity_name,
@@ -299,10 +314,11 @@ def run(
                 "ticker": ticker,
                 "similarity_cosine": sr.get("similarity_cosine"),
                 "similarity_jaccard": sr.get("similarity_jaccard"),
-                "change_intensity": sr.get("change_intensity"),
+                "numerical_divergence": sr.get("numerical_divergence"),
+                "change_intensity": ci,
                 "attention_proxy": attn,
                 "car": car_val,
-                "section_changes": sr.get("section_changes", []),
+                "section_changes": sec_changes,
                 "cleaned_text_path": cleaned_text_path,
             })
 

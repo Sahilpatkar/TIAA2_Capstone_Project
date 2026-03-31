@@ -12,6 +12,7 @@ function ClientModal({ isOpen, onClose, onSave, onDelete, client, availableTicke
   const [notes, setNotes] = useState('');
   const [selectedTickers, setSelectedTickers] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [tickerSearch, setTickerSearch] = useState('');
 
   useEffect(() => {
     if (client) {
@@ -28,6 +29,7 @@ function ClientModal({ isOpen, onClose, onSave, onDelete, client, availableTicke
       setSelectedTickers([]);
     }
     setConfirmDelete(false);
+    setTickerSearch('');
   }, [client, isOpen]);
 
   if (!isOpen) return null;
@@ -111,8 +113,17 @@ function ClientModal({ isOpen, onClose, onSave, onDelete, client, availableTicke
 
           <div className="modal-field">
             <label>Portfolio Tickers ({selectedTickers.length} selected)</label>
+            <input
+              className="modal-ticker-search"
+              type="text"
+              placeholder="Search tickers..."
+              value={tickerSearch}
+              onChange={e => setTickerSearch(e.target.value)}
+            />
             <div className="modal-ticker-grid">
-              {availableTickers.map(ticker => (
+              {availableTickers
+                .filter(t => !tickerSearch.trim() || t.toLowerCase().includes(tickerSearch.trim().toLowerCase()))
+                .map(ticker => (
                 <div
                   key={ticker}
                   className={`modal-ticker-chip ${selectedTickers.includes(ticker) ? 'active' : ''}`}

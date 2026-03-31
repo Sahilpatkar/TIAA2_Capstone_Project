@@ -21,3 +21,5 @@ flask-cors
 python-dotenv
 chromadb
 psycopg2-binary
+pytest
+pytest-cov

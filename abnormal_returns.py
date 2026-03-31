@@ -115,14 +115,77 @@ def compute_car(
     }
 
 
+def compute_volume_ratio(
+    ticker: str,
+    filed_date: str,
+    window: tuple[int, int] | None = None,
+    baseline_days: int | None = None,
+    baseline_gap: int | None = None,
+) -> float | None:
+    """
+    Abnormal trading-volume ratio around *filed_date*.
+
+    Returns event-window mean volume divided by trailing baseline mean volume.
+    A value > 1 signals above-normal investor attention; < 1 signals inattention.
+    Returns None when data is insufficient.
+    """
+    window = window or config.CAR_WINDOW
+    baseline_days = baseline_days or config.VOLUME_BASELINE_DAYS
+    baseline_gap = baseline_gap or config.VOLUME_BASELINE_GAP
+
+    buf = max(config.CAR_BUFFER_DAYS, baseline_days + baseline_gap + 30)
+    dt = datetime.strptime(filed_date, "%Y-%m-%d")
+    start_str = (dt - timedelta(days=buf)).strftime("%Y-%m-%d")
+    end_str = (dt + timedelta(days=config.CAR_BUFFER_DAYS)).strftime("%Y-%m-%d")
+
+    with contextlib.redirect_stderr(io.StringIO()):
+        data = yf.download(ticker, start=start_str, end=end_str, progress=False, auto_adjust=True)
+    if data.empty or "Volume" not in data.columns:
+        return None
+
+    volume = data["Volume"].squeeze()
+    if isinstance(volume, pd.DataFrame):
+        volume = volume.iloc[:, 0]
+
+    idx = volume.index
+    idx = idx.tz_localize(None) if idx.tz else idx
+    volume.index = idx
+
+    filed_dt = pd.Timestamp(filed_date)
+
+    idx_after = idx[idx >= filed_dt]
+    if idx_after.empty:
+        return None
+    event_idx = idx.get_loc(idx_after[0])
+
+    win_start = max(event_idx + window[0], 0)
+    win_end = min(event_idx + window[1] + 1, len(idx))
+    event_vol = volume.iloc[win_start:win_end]
+    if event_vol.empty:
+        return None
+
+    baseline_end = max(event_idx + window[0] - baseline_gap, 0)
+    baseline_start = max(baseline_end - baseline_days, 0)
+    baseline_vol = volume.iloc[baseline_start:baseline_end]
+    if baseline_vol.empty:
+        return None
+
+    baseline_mean = float(baseline_vol.mean())
+    if baseline_mean == 0 or np.isnan(baseline_mean):
+        return None
+
+    ratio = float(event_vol.mean()) / baseline_mean
+    return round(ratio, 6)
+
+
 def resolve_ticker(cik: int) -> str | None:
     """Look up ticker for a CIK using the config mapping."""
     return config.CIK_TO_TICKER.get(cik)
 
 
-# ---------------------------------------------------------------------------
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Compute CAR for a filing")
