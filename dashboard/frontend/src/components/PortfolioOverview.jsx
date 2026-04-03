@@ -24,6 +24,29 @@ function badgeClass(las) {
   return 'badge-low';
 }
 
+const SIGNAL_CONFIG = {
+  sell:    { label: 'SELL',    cls: 'signal-sell',    tip: 'Large disclosure changes with low investor attention — risk of negative drift.' },
+  caution: { label: 'CAUTION', cls: 'signal-caution', tip: 'Material changes detected with negative market reaction — reassess position.' },
+  hold:   { label: 'HOLD',    cls: 'signal-hold',    tip: 'Disclosure impact appears priced in — no action needed.' },
+  neutral: { label: 'NEUTRAL', cls: 'signal-neutral', tip: 'No strong signal — maintain current position.' },
+  buy:    { label: 'BUY',     cls: 'signal-buy',     tip: 'Stable filings with no negative signal or underreaction opportunity.' },
+};
+
+function SignalBadge({ signal, confidence, confidenceLevel, reasons }) {
+  const cfg = SIGNAL_CONFIG[signal] || SIGNAL_CONFIG.neutral;
+  const solidClass = confidenceLevel === 'strong' ? 'signal-strong' : '';
+  const lines = reasons?.length ? reasons : [cfg.tip];
+  const tip = lines.join('\n') + `\nConfidence: ${(confidence ?? 0).toFixed(2)} (${confidenceLevel || 'weak'})`;
+
+  return (
+    <span className="col-tip tip-right" data-tip={tip}>
+      <span className={`signal-badge ${cfg.cls} ${solidClass}`}>
+        {cfg.label}
+      </span>
+    </span>
+  );
+}
+
 const POLL_INTERVAL = 3000;
 
 function PortfolioOverview({ portfolio, filings, onRefresh }) {
@@ -173,6 +196,11 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
                   LAS
                 </span>
               </th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip="Buy/sell signal derived from LAS components. Based on filing change analysis — not investment advice.">
+                  Signal
+                </span>
+              </th>
               <th></th>
             </tr>
           </thead>
@@ -221,6 +249,16 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
                       </span>
                     ) : '\u2014'}
                   </td>
+                  <td className="ht-num">
+                    {h.signal ? (
+                      <SignalBadge
+                        signal={h.signal}
+                        confidence={h.signal_confidence}
+                        confidenceLevel={h.signal_confidence_level}
+                        reasons={h.signal_reasons}
+                      />
+                    ) : '\u2014'}
+                  </td>
                   <td>
                     {h.las == null && (
                       <span className="holding-actions">
@@ -246,6 +284,10 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
             })}
           </tbody>
         </table>
+        <div className="signal-disclaimer">
+          Signals are derived from SEC 10-K filing change analysis and are not investment advice.
+          Always conduct independent due diligence before making investment decisions.
+        </div>
       </div>
     </>
   );

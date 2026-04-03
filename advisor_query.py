@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 
 from dotenv import load_dotenv
@@ -21,8 +22,25 @@ load_dotenv()
 import pandas as pd
 
 import config
+from signals import compute_portfolio_signals
 from store import LASStore
 
+
+
+def _fetch_universe(db: LASStore) -> list[dict]:
+    """Fetch the latest filing for every ticker in the DB (absolute baseline)."""
+    all_tickers = sorted(config.CIK_TO_TICKER.values())
+    universe = []
+    for ticker in all_tickers:
+        latest = db.get_latest_by_ticker(ticker)
+        if latest and latest.get("change_intensity") is not None:
+            universe.append({
+                "ticker": ticker,
+                "change_intensity": latest.get("change_intensity"),
+                "attention_proxy": latest.get("attention_proxy"),
+                "car": latest.get("car"),
+            })
+    return universe
 
 
 # 1. Portfolio LAS aggregation
@@ -30,9 +48,10 @@ def aggregate_las(
     tickers: list[str],
     weights: dict[str, float] | None = None,
     db: LASStore | None = None,
+    risk_tolerance: str = "moderate",
 ) -> dict:
     """
-    Compute a portfolio-level LAS summary.
+    Compute a portfolio-level LAS summary with buy/sell signal annotations.
 
     Parameters
     ----------
@@ -42,10 +61,13 @@ def aggregate_las(
         {ticker: weight}.  Defaults to equal weight.
     db : LASStore, optional
         Open database handle.  Opened/closed automatically if None.
+    risk_tolerance : str
+        Client risk profile used to adjust signal thresholds.
 
     Returns
     -------
-    dict with keys: portfolio_las, holdings (list of per-ticker dicts).
+    dict with keys: portfolio_las, holdings (list of per-ticker dicts),
+    signal_summary.
     """
     own_db = db is None
     if own_db:
@@ -69,11 +91,18 @@ def aggregate_las(
                 "norm_change": latest.get("norm_change"),
                 "norm_attention": latest.get("norm_attention"),
                 "norm_car": latest.get("norm_car"),
+                "section_changes_json": latest.get("section_changes_json"),
             })
 
-        scored = [h for h in holdings if h.get("las") is not None]
+        def _valid_las(val):
+            return val is not None and not (isinstance(val, float) and math.isnan(val))
+
+        scored = [h for h in holdings if _valid_las(h.get("las"))]
         if not scored:
-            return {"portfolio_las": None, "holdings": holdings}
+            portfolio = {"portfolio_las": None, "holdings": holdings}
+            universe = _fetch_universe(db)
+            compute_portfolio_signals(portfolio, risk_tolerance, universe=universe)
+            return portfolio
 
         if weights:
             total_w = sum(weights.get(h["ticker"], 1.0) for h in scored)
@@ -85,11 +114,19 @@ def aggregate_las(
 
         holdings.sort(key=lambda h: h.get("las") or float("-inf"), reverse=True)
 
-        return {
+        portfolio = {
             "portfolio_las": round(port_las, 6),
             "holdings": holdings,
             "las_weights": config.LAS_WEIGHTS,
         }
+
+        universe = _fetch_universe(db)
+        compute_portfolio_signals(portfolio, risk_tolerance, universe=universe)
+
+        for h in holdings:
+            h.pop("section_changes_json", None)
+
+        return portfolio
     finally:
         if own_db:
             db.close()
@@ -208,8 +245,11 @@ def _llm_narrative(portfolio: dict, high_impact: list[dict]) -> str:
                 "Lazy Attention Score (LAS) analysis — which measures how much "
                 "SEC 10-K filings changed year-over-year and whether investors "
                 "paid attention — produce a concise, professional narrative for "
-                "an advisor. Highlight which holdings had the most material "
-                "disclosure changes and summarize the key themes."
+                "an advisor. Each holding has a signal (sell, caution, hold, "
+                "neutral, buy) with confidence and reasons. Explain which "
+                "holdings need attention, why they received their signal, "
+                "and summarize key themes. Always note that signals are "
+                "based on filing analysis and are not investment advice."
             ),
         },
         {

@@ -15,10 +15,10 @@ export function fetchFilings(tickers) {
   return API.get('/filings', { params }).then(r => r.data);
 }
 
-export function fetchPortfolio(tickers) {
-  return API.get('/portfolio', {
-    params: { tickers: tickers.join(',') },
-  }).then(r => r.data);
+export function fetchPortfolio(tickers, riskTolerance) {
+  const params = { tickers: tickers.join(',') };
+  if (riskTolerance) params.risk_tolerance = riskTolerance;
+  return API.get('/portfolio', { params }).then(r => r.data);
 }
 
 export function fetchSections(tickers, top = 10) {
@@ -78,4 +78,9 @@ export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippe
     snippet_old,
     snippet_new,
   }).then(r => r.data);
+}
+
+export function fetchBacktestResults(force = false) {
+  const params = force ? { force: '1' } : {};
+  return API.get('/backtest', { params }).then(r => r.data);
 }

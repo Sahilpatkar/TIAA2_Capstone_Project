@@ -6,9 +6,22 @@ import {
 
 const COLORS = ['#4361ee', '#06d6a0', '#ef476f', '#ffd166', '#118ab2', '#7209b7', '#f72585'];
 
+const SIGNAL_COLORS = {
+  sell:    '#d63d5e',
+  caution: '#e6a817',
+  hold:    '#3a6ccc',
+  neutral: '#a0aec0',
+  buy:     '#06a77d',
+};
+
+const SIGNAL_LABELS = {
+  sell: 'SELL', caution: 'CAUTION', hold: 'HOLD', neutral: 'NEUTRAL', buy: 'BUY',
+};
+
 function CustomTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const sigLabel = d.signal ? SIGNAL_LABELS[d.signal] || d.signal.toUpperCase() : '';
   return (
     <div style={{
       background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8,
@@ -17,12 +30,21 @@ function CustomTooltip({ active, payload }) {
       <strong>{d.ticker}</strong> ({d.reportDate})<br />
       LAS: {d.las.toFixed(4)}<br />
       CAR: {(d.car * 100).toFixed(2)}%
+      {sigLabel && <><br />Signal: <strong style={{ color: SIGNAL_COLORS[d.signal] || '#718096' }}>{sigLabel}</strong></>}
     </div>
   );
 }
 
-function LASvsCAR({ filings }) {
+function LASvsCAR({ filings, portfolio }) {
   const [showAll, setShowAll] = useState(false);
+
+  const signalMap = useMemo(() => {
+    const map = {};
+    (portfolio?.holdings || []).forEach(h => {
+      if (h.ticker && h.signal) map[h.ticker] = h.signal;
+    });
+    return map;
+  }, [portfolio]);
 
   const data = useMemo(() => {
     if (!filings || filings.length === 0) return [];
@@ -34,6 +56,7 @@ function LASvsCAR({ filings }) {
         las: Number(f.las),
         car: Number(f.car),
         reportDate: f.report_date || '',
+        signal: signalMap[f.ticker] || null,
       }));
 
     const latestByTicker = {};
@@ -47,7 +70,7 @@ function LASvsCAR({ filings }) {
       ...d,
       isLatest: d.reportDate === latestByTicker[d.ticker],
     }));
-  }, [filings]);
+  }, [filings, signalMap]);
 
   const tickers = useMemo(() => [...new Set(data.map(d => d.ticker))], [data]);
 
@@ -169,7 +192,7 @@ function LASvsCAR({ filings }) {
                 key={ticker}
                 name={ticker}
                 data={latestGrouped[ticker]}
-                fill={tickerColors[ticker]}
+                fill={SIGNAL_COLORS[signalMap[ticker]] || tickerColors[ticker]}
                 strokeWidth={1}
                 stroke="#fff"
               />
@@ -182,8 +205,12 @@ function LASvsCAR({ filings }) {
         <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 8, flexWrap: 'wrap' }}>
           {tickers.map(t => (
             <span key={t} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: tickerColors[t], display: 'inline-block' }} />
-              {t}
+              <span style={{
+                width: 10, height: 10, borderRadius: '50%',
+                background: SIGNAL_COLORS[signalMap[t]] || tickerColors[t],
+                display: 'inline-block',
+              }} />
+              {t}{signalMap[t] ? ` (${SIGNAL_LABELS[signalMap[t]] || ''})` : ''}
             </span>
           ))}
         </div>

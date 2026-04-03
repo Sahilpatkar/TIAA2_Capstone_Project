@@ -12,6 +12,7 @@ Usage:
 """
 
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -205,7 +206,8 @@ class LASStore:
         else:
             db_path = url.replace("sqlite:///", "") if url.startswith("sqlite:///") else config.DB_PATH
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
-            self._conn = sqlite3.connect(db_path)
+            self._conn = sqlite3.connect(db_path, timeout=30)
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.row_factory = sqlite3.Row
             self._init_sqlite_schema()
@@ -345,12 +347,22 @@ class LASStore:
 
     # -- write --
 
+    @staticmethod
+    def _clean(v):
+        """Convert NaN/inf floats to None so they become SQL NULL."""
+        if v is None:
+            return None
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
     def upsert(self, row: dict) -> None:
         """Insert or update a filing record."""
         section_json = row.get("section_changes_json")
         if isinstance(section_json, (list, dict)):
             section_json = json.dumps(section_json)
 
+        _c = self._clean
         params = (
             row.get("cik"),
             row.get("entity_name"),
@@ -358,16 +370,16 @@ class LASStore:
             row.get("filed_date"),
             row.get("report_date"),
             row.get("ticker"),
-            row.get("similarity_cosine"),
-            row.get("similarity_jaccard"),
-            row.get("numerical_divergence"),
-            row.get("change_intensity"),
-            row.get("attention_proxy"),
-            row.get("car"),
-            row.get("las"),
-            row.get("norm_change"),
-            row.get("norm_attention"),
-            row.get("norm_car"),
+            _c(row.get("similarity_cosine")),
+            _c(row.get("similarity_jaccard")),
+            _c(row.get("numerical_divergence")),
+            _c(row.get("change_intensity")),
+            _c(row.get("attention_proxy")),
+            _c(row.get("car")),
+            _c(row.get("las")),
+            _c(row.get("norm_change")),
+            _c(row.get("norm_attention")),
+            _c(row.get("norm_car")),
             section_json,
             row.get("cleaned_text_path"),
         )

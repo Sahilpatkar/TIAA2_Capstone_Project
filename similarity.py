@@ -71,11 +71,23 @@ def _parse_date(date_str: str) -> datetime | None:
 # Pairing
 # 
 
-def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
+def pair_filings(
+    filings: list[dict],
+    day_range: tuple[int, int] | None = None,
+) -> list[tuple[dict, dict]]:
     """
-    Pair each filing with its prior-year counterpart.
+    Pair each filing with its prior counterpart.
+
+    *day_range* is (min_days, max_days) between report dates.  Defaults to
+    the 10-K annual range (200, 550).  For 10-Q quarterly filings, pass
+    (60, 150) via ``config.PAIRING_DAY_RANGE["10-Q"]``.
+
     Returns list of (current, prior) tuples sorted by report date descending.
     """
+    if day_range is None:
+        day_range = getattr(config, "PAIRING_DAY_RANGE", {}).get("10-K", (200, 550))
+    min_days, max_days = day_range
+
     dated = []
     for f in filings:
         rd = _report_date_from_basename(f["_basename"])
@@ -84,7 +96,6 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
             dated.append(f)
 
     if len(dated) < 2:
-        # Fallback: if we have 2+ filings but no report dates parsed, pair by basename order
         if len(filings) >= 2:
             sorted_f = sorted(filings, key=lambda x: x["_basename"])
             return [(sorted_f[i], sorted_f[i - 1]) for i in range(1, len(sorted_f))]
@@ -95,11 +106,24 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
     pairs = []
     for i in range(1, len(dated)):
         current = dated[i]
-        prior = dated[i - 1]
         cur_dt = _parse_date(current["_report_date"])
-        pri_dt = _parse_date(prior["_report_date"])
-        if cur_dt and pri_dt and 200 < (cur_dt - pri_dt).days < 550:
-            pairs.append((current, prior))
+        if not cur_dt:
+            continue
+        best_prior = None
+        best_gap = max_days + 1
+        for j in range(i - 1, -1, -1):
+            prior = dated[j]
+            pri_dt = _parse_date(prior["_report_date"])
+            if not pri_dt:
+                continue
+            gap = (cur_dt - pri_dt).days
+            if gap >= max_days:
+                break
+            if min_days < gap < max_days and gap < best_gap:
+                best_prior = prior
+                best_gap = gap
+        if best_prior is not None:
+            pairs.append((current, best_prior))
 
     return pairs
 

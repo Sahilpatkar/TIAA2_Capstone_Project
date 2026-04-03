@@ -9,8 +9,8 @@ DB_PATH = os.path.join(DATA_DIR, "las_store.db")
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 # SEC / Filing settings
-FILING_TYPE = "10-K"  # MVP scope; extend to "10-Q" later
-MAX_FILINGS_PER_CIK = 5
+FILING_TYPES = ["10-K", "10-Q"]
+MAX_FILINGS_PER_CIK = 5   # per filing type
 
 # Keys are CIK integers, values are ticker strings.
 CIK_TO_TICKER = {
@@ -23,7 +23,7 @@ CIK_TO_TICKER = {
     93410: "CVX",
     858877: "CSCO",
     21344: "KO",
-    1001039: "DIS",
+    1744489: "DIS",
     29915: "DOW",
     886982: "GS",
     354950: "HD",
@@ -135,6 +135,40 @@ SECTION_WEIGHTS = {
     "item_15": 0.01,   # Exhibits / Financial Statement Schedules
 }
 
+# 10-Q sections (Part I and Part II items).  The regex in extract_clean.py
+# already matches these patterns; this list is used for section-level LAS.
+ITEM_SECTIONS_10Q = [
+    "item_1",   # Financial Statements
+    "item_2",   # MD&A
+    "item_3",   # Quantitative & Qualitative Market Risk
+    "item_4",   # Controls and Procedures
+    "item_1a",  # Risk Factors (Part II)
+    "item_2",   # Unregistered Sales of Equity
+    "item_5",   # Other Information
+    "item_6",   # Exhibits
+]
+
+# Section weights for 10-Q filings (same key sections, fewer sections total).
+SECTION_WEIGHTS_10Q = {
+    "item_1":  0.10,   # Financial Statements
+    "item_2":  0.35,   # MD&A (strongest predictor, same as 10-K item_7)
+    "item_3":  0.15,   # Quantitative & Qualitative Market Risk
+    "item_4":  0.05,   # Controls and Procedures
+    "item_1a": 0.30,   # Risk Factors
+    "item_5":  0.03,   # Other Information
+    "item_6":  0.02,   # Exhibits
+}
+
+# Pairing gap (calendar days) for filing type.
+# 10-K: annual, gap between 200 and 550 days.
+# 10-Q: quarterly, gap between 60 and 150 days.
+PAIRING_DAY_RANGE = {
+    "10-K": (200, 550),
+    "10-Q": (60, 150),
+}
+
+PIPELINE_WORKERS = 4  # concurrent CIK workers for run_pipeline.py (--workers flag)
+
 SIMILARITY_MEASURES = ["cosine", "jaccard"]  # supported: cosine, jaccard
 
 NUMERIC_TABLE_THRESHOLD = 0.15
@@ -153,13 +187,21 @@ CAR_BUFFER_DAYS = 30  # calendar-day buffer when fetching price data
 VOLUME_BASELINE_DAYS = 60  # trailing trading days for baseline average volume
 VOLUME_BASELINE_GAP = 5    # trading-day gap before event window to avoid leakage
 
+# Composite attention proxy weights (volume ratio + filing delay).
+# Filing delay = calendar days from report_date to filed_date.
+# Late filers signal lower attention / quality.
+ATTENTION_COMPOSITE_WEIGHTS = {
+    "volume_ratio": 0.7,
+    "filing_delay": 0.3,
+}
+
 # 
-# LAS formula  –  LAS = w_change * f(change) - w_attention * f(attn) + w_car * f(|car|)
+# LAS formula  –  LAS = w_change * f(change) - w_attention * f(attn) - w_car * f(car)
 
 LAS_WEIGHTS = {
-    "w_change": 0.50,
-    "w_attention": 0.25,
-    "w_car": 0.25,
+    "w_change": 0.60,
+    "w_attention": 0.30,
+    "w_car": 0.10,
 }
 
 # "rank" (cross-sectional rank percentile) or "zscore"
@@ -168,7 +210,7 @@ LAS_NORMALIZATION = "rank"
 
 # Pipeline versioning — bump to force reprocessing of all filings
 
-PIPELINE_VERSION = "1.3"
+PIPELINE_VERSION = "1.5"
 
 
 # LLM settings (advisor narrative)
@@ -182,6 +224,30 @@ LLM_MODEL = "gpt-4o-mini"
 #   RAG_EMBEDDING_PROVIDER = "bedrock"
 #   RAG_LLM_PROVIDER = "bedrock"
 #   RAG_VECTOR_STORE = "opensearch"
+
+# Signal thresholds for buy/sell/hold classification based on LAS components.
+# Uses norm_change (rank percentile 0-1), raw attention_proxy, and raw CAR.
+SIGNAL_THRESHOLDS = {
+    "change_high": 0.70,           # rank percentile cutoff for "high" change
+    "change_low": 0.30,            # rank percentile cutoff for "low" change
+    "attention_low": 1.0,          # volume ratio below this = inattention
+    "car_negative": -0.005,        # CAR below this = negative reaction
+    "car_deep_negative": -0.015,   # deep selloff threshold for contrarian buy
+}
+
+# Confidence = |change_z| + |attention_z| + |CAR_z|; controls signal strength.
+SIGNAL_CONFIDENCE = {
+    "strong": 3.0,            # sum of |z| above this = strong recommendation
+    "moderate": 1.5,          # between moderate and strong = standard recommendation
+}
+
+# High-importance sections that strengthen SELL/CAUTION when they drive the change.
+SIGNAL_KEY_SECTIONS = {"item_1a", "item_7", "item_7a"}
+
+# When both item_1a (Risk Factors) and item_7 (MD&A) exceed this threshold,
+# the sell signal's change_high requirement is lowered by 0.10 (section boost).
+SECTION_SELL_BOOST_THRESHOLD = 0.05
+
 
 RAG_ENABLED = True
 RAG_EMBEDDING_PROVIDER = "openai"           # "openai" | "bedrock"

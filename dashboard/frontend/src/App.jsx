@@ -14,6 +14,8 @@ import LASvsCAR from './components/LASvsCAR';
 import ChatPanel from './components/ChatPanel';
 import RiskInsights from './components/RiskInsights';
 import ClientModal from './components/ClientModal';
+import SignalSummary from './components/SignalSummary';
+import BacktestResults from './components/BacktestResults';
 
 class ErrorBoundary extends Component {
   state = { error: null };
@@ -69,12 +71,12 @@ function App() {
     fetchClients().then(setClients).catch(() => {});
   }, []);
 
-  const loadAnalysis = useCallback((tickers) => {
+  const loadAnalysis = useCallback((tickers, riskTolerance) => {
     if (!tickers.length) return;
     setLoading(true);
 
     Promise.all([
-      fetchPortfolio(tickers),
+      fetchPortfolio(tickers, riskTolerance),
       fetchFilings(tickers),
       fetchSections(tickers, 10),
     ])
@@ -95,17 +97,17 @@ function App() {
   const handleAnalyze = useCallback((tickers) => {
     if (!tickers.length) return;
     setSelectedTickers(tickers);
-    loadAnalysis(tickers);
-  }, [loadAnalysis]);
+    loadAnalysis(tickers, activeClient?.risk_tolerance);
+  }, [loadAnalysis, activeClient]);
 
   const handleRefreshAfterPipeline = useCallback(() => {
     fetchTickers()
       .then(setTickerMeta)
       .catch(() => {});
     if (selectedTickers.length) {
-      loadAnalysis(selectedTickers);
+      loadAnalysis(selectedTickers, activeClient?.risk_tolerance);
     }
-  }, [selectedTickers, loadAnalysis]);
+  }, [selectedTickers, loadAnalysis, activeClient]);
 
   const handleSelectClient = useCallback((client) => {
     setActiveClient(client);
@@ -186,6 +188,7 @@ function App() {
 
         {portfolio && !loading && (
           <>
+            <SignalSummary portfolio={portfolio} />
             <PortfolioOverview portfolio={portfolio} filings={filings} onRefresh={handleRefreshAfterPipeline} />
 
             <div className="charts-row">
@@ -193,13 +196,15 @@ function App() {
               <SimilarityChart filings={filings} />
             </div>
 
-            <LASvsCAR filings={filings} />
+            <LASvsCAR filings={filings} portfolio={portfolio} />
 
             <RiskInsights sections={sections} tickers={selectedTickers} />
 
             <FilingsTable filings={filings} />
 
             <SectionChanges sections={sections} />
+
+            <BacktestResults />
           </>
         )}
 

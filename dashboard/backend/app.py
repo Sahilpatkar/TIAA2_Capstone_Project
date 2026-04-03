@@ -26,6 +26,7 @@ from store import LASStore
 from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
 from chat import handle_chat  
 from run_pipeline import run as run_pipeline  
+from backtest import load_backtest_data, enrich_with_forward_returns, assign_signals, compute_ic, compute_component_ic, quintile_analysis, signal_hit_rate, portfolio_simulation  
 
 app = Flask(__name__)
 CORS(app)
@@ -136,7 +137,7 @@ def api_filings_by_ticker(ticker):
 
 
 
-# GET /api/portfolio?tickers=AAPL,JPM  –  portfolio LAS aggregation
+# GET /api/portfolio?tickers=AAPL,JPM&risk_tolerance=moderate  –  portfolio LAS + signals
 @app.route("/api/portfolio")
 def api_portfolio():
     tickers_param = request.args.get("tickers", "")
@@ -144,9 +145,10 @@ def api_portfolio():
         return json_response({"error": "tickers parameter required"}, 400)
 
     tickers = [t.strip().upper() for t in tickers_param.split(",") if t.strip()]
+    risk_tolerance = request.args.get("risk_tolerance", "moderate")
     db = _get_db()
     try:
-        result = aggregate_las(tickers, db=db)
+        result = aggregate_las(tickers, db=db, risk_tolerance=risk_tolerance)
         return json_response(result)
     finally:
         db.close()
@@ -392,6 +394,59 @@ def api_pipeline_status(job_id):
 
     return json_response({"job_id": job_id, **job})
 
+
+
+_backtest_cache: dict | None = None
+_backtest_lock = threading.Lock()
+
+
+@app.route("/api/backtest")
+def api_backtest():
+    """Return pre-computed backtest validation metrics (IC, quintiles, hit rates, simulations)."""
+    global _backtest_cache
+
+    force = request.args.get("force", "0") == "1"
+
+    with _backtest_lock:
+        if _backtest_cache and not force:
+            return json_response(_backtest_cache)
+
+    db = _get_db()
+    try:
+        df = load_backtest_data(db)
+        if df.empty:
+            return json_response({"error": "no scored filings — run the pipeline first"}, 404)
+
+        df = enrich_with_forward_returns(df)
+        df = assign_signals(df)
+
+        ic_df = compute_ic(df)
+        comp_ic_df = compute_component_ic(df)
+        quint_df = quintile_analysis(df)
+        hit_df = signal_hit_rate(df)
+
+        sims = {}
+        for h in [30, 60, 90, 180]:
+            sim = portfolio_simulation(df, h)
+            sims[str(h)] = {k: v for k, v in sim.items() if k != "equity_curve"}
+
+        result = {
+            "n_filings": len(df),
+            "n_tickers": int(df["ticker"].nunique()),
+            "ic": ic_df.to_dict("records"),
+            "component_ic": comp_ic_df.to_dict("records"),
+            "quintiles": quint_df.to_dict("records"),
+            "signal_hit_rates": hit_df.to_dict("records"),
+            "portfolio_simulations": sims,
+            "signal_distribution": df["signal"].value_counts().to_dict(),
+        }
+
+        with _backtest_lock:
+            _backtest_cache = result
+
+        return json_response(result)
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
