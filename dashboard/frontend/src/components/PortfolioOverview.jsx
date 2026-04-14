@@ -1,9 +1,9 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { runPipeline, getPipelineStatus } from '../api';
 
-const W_CHANGE = 0.50;
-const W_ATTENTION = 0.25;
-const W_CAR = 0.25;
+const W_CHANGE = 0.60;
+const W_ATTENTION = 0.30;
+const W_CAR = 0.10;
 
 function fmt(val, decimals = 4) {
   if (val == null || isNaN(val)) return 'N/A';
@@ -49,10 +49,20 @@ function SignalBadge({ signal, confidence, confidenceLevel, reasons }) {
 
 const POLL_INTERVAL = 3000;
 
-function PortfolioOverview({ portfolio, filings, onRefresh }) {
+function PortfolioOverview({ portfolio, filings, onRefresh, onProcessWithLogs, pipelineJobs }) {
   const [processing, setProcessing] = useState({});
   const [errors, setErrors] = useState({});
   const pollTimers = useRef({});
+
+  // Build a map of ticker -> current stage from active pipeline jobs
+  const tickerStages = {};
+  if (pipelineJobs) {
+    for (const job of pipelineJobs) {
+      if (job.status === 'running') {
+        job.tickers.forEach(t => { tickerStages[t] = job.currentStage || 'starting'; });
+      }
+    }
+  }
 
   const missingTickers = (portfolio?.holdings || [])
     .filter(h => h.las == null)
@@ -106,7 +116,25 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
 
     runPipeline(tickerList)
       .then(data => {
-        pollJob(data.job_id, tickerList);
+        // Mark skipped tickers with errors, remove from processing
+        const skipped = data.skipped || [];
+        if (skipped.length) {
+          setProcessing(prev => {
+            const next = { ...prev };
+            skipped.forEach(t => delete next[t]);
+            return next;
+          });
+          setErrors(prev => {
+            const next = { ...prev };
+            skipped.forEach(t => { next[t] = 'No CIK mapping — may be delisted'; });
+            return next;
+          });
+        }
+        // Poll only for valid tickers
+        const validTickers = data.tickers || tickerList.filter(t => !skipped.includes(t));
+        if (validTickers.length) {
+          pollJob(data.job_id, validTickers);
+        }
       })
       .catch(err => {
         setProcessing(prev => {
@@ -192,7 +220,7 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
                 </span>
               </th>
               <th className="ht-num">
-                <span className="col-tip" data-tip="Lazy Attention Score = Change - Attention + CAR. Higher means more material changes with less investor attention. Green ≥ 0.50, Yellow ≥ 0.25, Red < 0.25">
+                <span className="col-tip" data-tip="Lazy Attention Score = Change - Attention - CAR. Higher means more material changes with less investor attention. Green ≥ 0.50, Yellow ≥ 0.25, Red < 0.25">
                   LAS
                 </span>
               </th>
@@ -209,7 +237,7 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
               const hasBreakdown = h.las != null && h.norm_change != null;
               const changeC = hasBreakdown ? W_CHANGE * Number(h.norm_change) : null;
               const attnC = hasBreakdown ? -(W_ATTENTION * Number(h.norm_attention || 0)) : null;
-              const carC = hasBreakdown ? W_CAR * Number(h.norm_car || 0) : null;
+              const carC = hasBreakdown ? -(W_CAR * Number(h.norm_car || 0)) : null;
 
               return (
                 <tr key={i}>
@@ -231,8 +259,8 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
                   </td>
                   <td className="ht-num">
                     {carC != null ? (
-                      <span className="col-tip" data-tip={`+${carC.toFixed(3)} added to LAS. Higher = larger abnormal market reaction around the filing.`}>
-                        +{carC.toFixed(3)}
+                      <span className="col-tip" data-tip={`${carC.toFixed(3)} subtracted from LAS. Negative CAR (market overreaction) increases LAS via mean-reversion signal.`}>
+                        {carC.toFixed(3)}
                       </span>
                     ) : '\u2014'}
                   </td>
@@ -262,15 +290,33 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
                   <td>
                     {h.las == null && (
                       <span className="holding-actions">
-                        {errors[h.ticker] && (
-                          <span className="holding-error" title={errors[h.ticker]}>Error</span>
-                        )}
-                        {processing[h.ticker] ? (
-                          <span className="holding-badge holding-processing">Processing...</span>
+                        {errors[h.ticker] ? (
+                          <span className="holding-error-wrap">
+                            <span className="holding-error" title={errors[h.ticker]}>
+                              {errors[h.ticker].length > 40
+                                ? errors[h.ticker].slice(0, 40) + '...'
+                                : errors[h.ticker]}
+                            </span>
+                            {!errors[h.ticker].includes('delisted') && !errors[h.ticker].includes('CIK') && (
+                              <button
+                                className="holding-retry-btn"
+                                onClick={() => {
+                                  setErrors(prev => { const n = {...prev}; delete n[h.ticker]; return n; });
+                                  onProcessWithLogs ? onProcessWithLogs(h.ticker) : handleProcess(h.ticker);
+                                }}
+                              >
+                                Retry
+                              </button>
+                            )}
+                          </span>
+                        ) : (processing[h.ticker] || tickerStages[h.ticker]) ? (
+                          <span className="holding-badge holding-processing">
+                            Processing{tickerStages[h.ticker] ? ` (${tickerStages[h.ticker]})` : '...'}
+                          </span>
                         ) : (
                           <button
                             className="holding-process-btn"
-                            onClick={() => handleProcess(h.ticker)}
+                            onClick={() => onProcessWithLogs ? onProcessWithLogs(h.ticker) : handleProcess(h.ticker)}
                             disabled={anyProcessing}
                           >
                             Process

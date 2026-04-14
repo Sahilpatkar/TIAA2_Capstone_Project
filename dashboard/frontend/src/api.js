@@ -8,6 +8,10 @@ export function fetchTickers() {
   return API.get('/tickers').then(r => r.data);
 }
 
+export function fetchAllTickers() {
+  return API.get('/tickers/all').then(r => r.data);
+}
+
 export function fetchFilings(tickers) {
   const params = tickers && tickers.length > 0
     ? { tickers: tickers.join(',') }
@@ -71,6 +75,27 @@ export function fetchRiskNarrative(tickers) {
   }).then(r => r.data);
 }
 
+export function subscribePipelineLogs(jobId, onLog, onDone, onError) {
+  const baseUrl = import.meta.env.VITE_API_URL || '/api';
+  const es = new EventSource(`${baseUrl}/pipeline/logs/${jobId}`);
+
+  es.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'log') onLog(data);
+      else if (data.type === 'done') { onDone(data); es.close(); }
+      else if (data.type === 'error') { onError(data); es.close(); }
+    } catch { /* ignore parse errors */ }
+  };
+
+  es.onerror = () => {
+    onError({ msg: 'Connection lost' });
+    es.close();
+  };
+
+  return es;
+}
+
 export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippet_new }) {
   return API.post('/sections/summarize', {
     ticker,
@@ -78,9 +103,4 @@ export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippe
     snippet_old,
     snippet_new,
   }).then(r => r.data);
-}
-
-export function fetchBacktestResults(force = false) {
-  const params = force ? { force: '1' } : {};
-  return API.get('/backtest', { params }).then(r => r.data);
 }

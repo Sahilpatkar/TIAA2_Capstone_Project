@@ -11,6 +11,7 @@ Usage:
 import argparse
 import contextlib
 import io
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -18,6 +19,18 @@ import pandas as pd
 import yfinance as yf
 
 import config
+
+
+def _yf_download_with_retry(ticker: str, start: str, end: str, max_retries: int = 3) -> pd.DataFrame:
+    """yf.download wrapper with retries + backoff to survive transient rate limits."""
+    for attempt in range(max_retries):
+        with contextlib.redirect_stderr(io.StringIO()):
+            data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+        if not data.empty:
+            return data
+        if attempt < max_retries - 1:
+            time.sleep(1.5 * (attempt + 1))
+    return data
 
 
 def _trading_days_around(filed_date: str, buffer_calendar_days: int = None) -> tuple[str, str]:
@@ -31,8 +44,7 @@ def _trading_days_around(filed_date: str, buffer_calendar_days: int = None) -> t
 
 def _daily_returns(ticker: str, start: str, end: str) -> pd.Series:
     """Fetch adjusted close prices from Yahoo Finance and compute daily returns."""
-    with contextlib.redirect_stderr(io.StringIO()):
-        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    data = _yf_download_with_retry(ticker, start, end)
     if data.empty:
         return pd.Series(dtype=float)
     close = data["Close"].squeeze()
@@ -138,8 +150,7 @@ def compute_volume_ratio(
     start_str = (dt - timedelta(days=buf)).strftime("%Y-%m-%d")
     end_str = (dt + timedelta(days=config.CAR_BUFFER_DAYS)).strftime("%Y-%m-%d")
 
-    with contextlib.redirect_stderr(io.StringIO()):
-        data = yf.download(ticker, start=start_str, end=end_str, progress=False, auto_adjust=True)
+    data = _yf_download_with_retry(ticker, start_str, end_str)
     if data.empty or "Volume" not in data.columns:
         return None
 
@@ -179,8 +190,9 @@ def compute_volume_ratio(
 
 
 def resolve_ticker(cik: int) -> str | None:
-    """Look up ticker for a CIK using the config mapping."""
-    return config.CIK_TO_TICKER.get(cik)
+    """Look up ticker for a CIK using the full (unfiltered) config mapping."""
+    full = getattr(config, "_CIK_TO_TICKER_FULL", config.CIK_TO_TICKER)
+    return full.get(cik)
 
 
 

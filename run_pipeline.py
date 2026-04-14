@@ -173,9 +173,9 @@ def _fetch_market_data(ticker: str, filed_date: str) -> tuple[float | None, floa
     try:
         attn = get_attention_proxy(ticker, filed_date)
         if attn is not None:
-            log.info("  [attention] %s %s  ratio=%.4f", ticker, filed_date, attn)
+            log.info("  [attention] %s %s  volume ratio=%.4f", ticker, filed_date, attn)
         else:
-            log.info("  [attention] %s %s  (no volume data; skipped)", ticker, filed_date)
+            log.info("  [attention] %s %s  no volume data available from Yahoo Finance", ticker, filed_date)
     except Exception as e:
         log.warning("  [attention] %s %s  error: %s", ticker, filed_date, e)
 
@@ -185,7 +185,7 @@ def _fetch_market_data(ticker: str, filed_date: str) -> tuple[float | None, floa
         if car_val is not None:
             log.info("  [returns]   %s %s  CAR=%.4f", ticker, filed_date, car_val)
         else:
-            log.info("  [returns]   %s %s  (no price data; skipped)", ticker, filed_date)
+            log.info("  [returns]   %s %s  stock price data not available from Yahoo Finance", ticker, filed_date)
     except Exception as e:
         log.warning("  [returns]   %s %s  error: %s", ticker, filed_date, e)
 
@@ -220,11 +220,12 @@ def _process_one_cik(
     if skip_pull:
         entity_dir = find_entity_dir(cik)
         if entity_dir is None:
-            log.error("  ERROR: No entity dir found for CIK %d. Run without --skip-pull.", cik)
+            log.error("  [pull] No entity dir found for CIK %d. Run without --skip-pull.", cik)
             db.close()
             return 0, 0
         filings_meta = _filing_metadata_from_dir(entity_dir, cik)
     else:
+        log.info("  [pull] Downloading SEC filings for %s (CIK %d)...", ticker, cik)
         entity_dir, filings_meta = pull_filings(cik, max_filings)
 
     filings_meta = _enrich_filed_dates(cik, filings_meta)
@@ -259,20 +260,21 @@ def _process_one_cik(
     log.info("  Entity dir: %s  (%d new, %d skipped)", entity_dir, len(to_process), n_skipped)
 
     # --- Step 2: Extract & clean ---
-    log.info("  [extract] Cleaning HTML filings...")
+    log.info("  [extract] Cleaning and extracting text from %d HTML filings for %s...",
+             len(to_process), ticker)
     cleaned_paths = process_entity_dir(entity_dir)
     if not cleaned_paths:
-        log.warning("  WARNING: No HTML files found to clean.")
+        log.warning("  [extract] No HTML files found to clean for %s.", ticker)
         db.close()
         return 0, n_skipped
 
     # --- Step 3: Embeddings ---
-    log.info("  [embed] Building count vectors...")
+    log.info("  [embed] Building document vectors for %s...", ticker)
     vec_result = build_vectors(entity_dir, use_tfidf=False)
     save_vectors(entity_dir, vec_result)
 
     # --- Step 4-5: Similarity ---
-    log.info("  [similarity] Computing year-over-year similarity...")
+    log.info("  [similarity] Computing year-over-year similarity for %s...", ticker)
     sim_results = compute_similarity(entity_dir)
     if not sim_results:
         log.warning("  WARNING: Need >= 2 filings for similarity.")
@@ -306,8 +308,8 @@ def _process_one_cik(
         filing_basenames[accession] = basename
 
     # --- Step 6-7: Fetch market data (attention + CAR) in parallel ---
-    log.info("  [market] Fetching attention & CAR for %d filing(s) (yf_workers=%d)...",
-             len(to_process), yf_workers)
+    log.info("  [market] Fetching market data from Yahoo Finance for %s (%d filing(s))...",
+             ticker, len(to_process))
 
     market_data: dict[str, tuple[float | None, float | None]] = {}
     filings_needing_market = [
@@ -329,6 +331,14 @@ def _process_one_cik(
                 except Exception as e:
                     log.warning("  [market] %s failed: %s", acc, e)
                     market_data[acc] = (None, None)
+
+    # Market data summary
+    attn_ok = sum(1 for a, c in market_data.values() if a is not None)
+    car_ok = sum(1 for a, c in market_data.values() if c is not None)
+    total_mkt = len(market_data)
+    if total_mkt:
+        log.info("  [market] Completed: %d/%d filings have volume data, %d/%d have return data",
+                 attn_ok, total_mkt, car_ok, total_mkt)
 
     # --- Assemble rows ---
     rows_for_las = []
@@ -369,7 +379,7 @@ def _process_one_cik(
         })
 
     # --- Step 8: LAS ---
-    log.info("  [las] Computing Lazy Attention Scores...")
+    log.info("  [las] Computing Lazy Attention Scores for %s...", ticker)
     df = pd.DataFrame(rows_for_las)
     if "change_intensity" in df.columns and df["change_intensity"].notna().any():
         df = compute_las(df)
@@ -377,7 +387,7 @@ def _process_one_cik(
         df["las"] = None
 
     # --- Step 9: Store & mark processed ---
-    log.info("  [store] Persisting to database...")
+    log.info("  [store] Saving results to database for %s...", ticker)
     for _, row in df.iterrows():
         r = row.to_dict()
         section_changes = r.pop("section_changes", [])
@@ -395,7 +405,7 @@ def _process_one_cik(
         )
 
     n_processed = len(df)
-    log.info("  Stored %d filing(s) for %s", n_processed, ticker)
+    log.info("  [done] Completed processing for %s: %d filing(s) stored", ticker, n_processed)
     db.close()
     return n_processed, n_skipped
 

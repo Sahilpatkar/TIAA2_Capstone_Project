@@ -249,7 +249,9 @@ def _llm_narrative(portfolio: dict, high_impact: list[dict]) -> str:
                 "neutral, buy) with confidence and reasons. Explain which "
                 "holdings need attention, why they received their signal, "
                 "and summarize key themes. Always note that signals are "
-                "based on filing analysis and are not investment advice."
+                "based on filing analysis and are not investment advice. "
+                "Keep the response under 500 words and always finish every "
+                "sentence — never leave text incomplete."
             ),
         },
         {
@@ -262,7 +264,7 @@ def _llm_narrative(portfolio: dict, high_impact: list[dict]) -> str:
         model=config.LLM_MODEL,
         messages=messages,
         temperature=0.3,
-        max_tokens=800,
+        max_tokens=1500,
     )
 
     return response.choices[0].message.content.strip()

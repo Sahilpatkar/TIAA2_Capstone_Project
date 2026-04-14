@@ -6,10 +6,12 @@ Run:  python app.py          (starts on port 5001)
 """
 
 import json
+import logging
 import math
 import os
 import sys
 import threading
+import time
 import uuid
 
 from dotenv import load_dotenv
@@ -25,9 +27,6 @@ import config
 from store import LASStore  
 from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
 from chat import handle_chat  
-from run_pipeline import run as run_pipeline  
-from backtest import load_backtest_data, enrich_with_forward_returns, assign_signals, compute_ic, compute_component_ic, quintile_analysis, signal_hit_rate, portfolio_simulation  
-
 app = Flask(__name__)
 CORS(app)
 
@@ -70,6 +69,27 @@ def api_tickers():
                 "ticker": t,
                 "sector": meta.get("sector", "Other"),
                 "industry": meta.get("industry", "Other"),
+            })
+        return json_response(result)
+    finally:
+        db.close()
+
+
+
+# GET /api/tickers/all  –  full S&P 500 universe with processed flag
+@app.route("/api/tickers/all")
+def api_tickers_all():
+    db = _get_db()
+    try:
+        df = db.get_all_filings()
+        processed = set(df["ticker"].dropna().unique()) if not df.empty else set()
+        result = []
+        for ticker, meta in sorted(config.TICKER_SECTOR_INDUSTRY.items()):
+            result.append({
+                "ticker": ticker,
+                "sector": meta.get("sector", "Other"),
+                "industry": meta.get("industry", "Other"),
+                "processed": ticker in processed,
             })
         return json_response(result)
     finally:
@@ -333,22 +353,147 @@ def api_chat():
 
 
 
-# Pipeline job runner (background thread)
+# ---------------------------------------------------------------------------
+# Pipeline job store — file-based JSON so all gunicorn workers can access it
+# ---------------------------------------------------------------------------
 
-_pipeline_jobs: dict[str, dict] = {}
-_pipeline_lock = threading.Lock()
+import subprocess
+import tempfile
+
+_JOBS_DIR = os.path.join(tempfile.gettempdir(), "lazyprices_pipeline_jobs")
+os.makedirs(_JOBS_DIR, exist_ok=True)
 
 
-def _run_pipeline_thread(job_id: str, ciks: list[int]):
-    """Execute the pipeline in a background thread and update job status."""
+def _job_path(job_id: str) -> str:
+    return os.path.join(_JOBS_DIR, f"{job_id}.json")
+
+
+def _save_job(job_id: str, job: dict):
+    """Atomically write job state to disk."""
+    path = _job_path(job_id)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(job, f)
+    os.replace(tmp, path)
+
+
+def _load_job(job_id: str) -> dict | None:
+    path = _job_path(job_id)
+    if not os.path.exists(path):
+        return None
     try:
-        run_pipeline(ciks)
-        with _pipeline_lock:
-            _pipeline_jobs[job_id]["status"] = "completed"
-    except Exception as e:
-        with _pipeline_lock:
-            _pipeline_jobs[job_id]["status"] = "failed"
-            _pipeline_jobs[job_id]["error"] = str(e)
+        with open(path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _run_pipeline_subprocess(job_id: str, ciks: list[int]):
+    """Launch the pipeline as a subprocess that writes logs to the job file.
+
+    A thin wrapper script is executed so the heavy CPU work (NLP, vectorisation)
+    happens in a separate process and does not block the gunicorn web server.
+    """
+    # Build a small inline Python script that:
+    # 1. Runs the pipeline with a custom logging handler
+    # 2. Streams stage/log JSON lines to stdout
+    # 3. Prints a final status line
+    cik_csv = ",".join(str(c) for c in ciks)
+    script = f"""
+import json, logging, sys, os, time
+# cwd is set to PROJECT_ROOT by the parent process
+sys.path.insert(0, os.getcwd())
+
+import config
+from run_pipeline import run as run_pipeline
+
+import re as _re
+
+# Summary keywords — stage-start messages the user cares about
+_SUMMARY_RE = _re.compile(
+    r'(Downloading|Cleaning|Building|Computing|Fetching|Saving|Completed|Processing CIK)',
+    _re.IGNORECASE,
+)
+# Detail noise — file paths, accession IDs, skip/new markers, separators
+_DETAIL_RE = _re.compile(
+    r'(Already on disk|will process|already processed|already up to date|Entity dir|=====|skipped|new\])',
+    _re.IGNORECASE,
+)
+
+class StreamHandler(logging.Handler):
+    def emit(self, record):
+        msg = self.format(record).strip()
+        if not msg or msg.startswith('==='):
+            return
+        stage = ""
+        if msg.startswith("["):
+            i = msg.find("]")
+            if i > 0:
+                stage = msg[1:i].strip()
+        # Classify as summary or detail
+        if _SUMMARY_RE.search(msg):
+            level = "summary"
+        elif _DETAIL_RE.search(msg) or not stage:
+            level = "detail"
+        else:
+            level = "detail"
+        line = json.dumps({{"ts": record.created, "msg": msg, "stage": stage, "level": level}})
+        sys.stdout.write(line + "\\n")
+        sys.stdout.flush()
+
+logger = logging.getLogger("pipeline")
+logger.setLevel(logging.INFO)
+logger.addHandler(StreamHandler())
+
+ciks = [{cik_csv}]
+try:
+    run_pipeline(ciks)
+    print(json.dumps({{"_status": "completed"}}))
+except Exception as e:
+    print(json.dumps({{"_status": "failed", "_error": str(e)}}))
+"""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=PROJECT_ROOT,
+        text=True,
+        bufsize=1,  # line-buffered
+    )
+
+    # Reader thread: reads subprocess stdout line-by-line and updates job file
+    def _reader():
+        job = _load_job(job_id) or {
+            "status": "running", "tickers": [], "error": None,
+            "logs": [], "current_stage": "",
+        }
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if "_status" in data:
+                job["status"] = data["_status"]
+                job["error"] = data.get("_error")
+            else:
+                job["logs"].append(data)
+                if data.get("stage"):
+                    job["current_stage"] = data["stage"]
+            _save_job(job_id, job)
+
+        proc.wait()
+        if job["status"] == "running":
+            stderr = (proc.stderr.read() or "").strip()
+            job["status"] = "failed"
+            job["error"] = stderr or f"Process exited with code {proc.returncode}"
+            _save_job(job_id, job)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
 
 
 @app.route("/api/pipeline/run", methods=["POST"])
@@ -360,93 +505,95 @@ def api_pipeline_run():
 
     tickers = [t.strip().upper() for t in tickers if t.strip()]
 
-    unknown = [t for t in tickers if t not in config.TICKER_TO_CIK]
-    if unknown:
+    # Use full (unfiltered) mapping so users can process tickers outside the demo subset
+    full_map = getattr(config, "FULL_TICKER_TO_CIK", config.TICKER_TO_CIK)
+    unknown = [t for t in tickers if t not in full_map]
+    valid = [t for t in tickers if t in full_map]
+
+    # If ALL tickers are unknown, return error
+    if not valid:
         return json_response(
-            {"error": f"Unknown tickers: {', '.join(unknown)}"}, 400
+            {"error": f"Unknown tickers: {', '.join(unknown)}. No CIK mapping found — these may be delisted."}, 400
         )
 
-    ciks = [config.TICKER_TO_CIK[t] for t in tickers]
+    ciks = [full_map[t] for t in valid]
     job_id = uuid.uuid4().hex[:12]
 
-    with _pipeline_lock:
-        _pipeline_jobs[job_id] = {
-            "status": "running",
-            "tickers": tickers,
-            "error": None,
-        }
+    # Seed logs with skip warnings for unknown tickers
+    initial_logs = []
+    for t in unknown:
+        initial_logs.append({
+            "ts": time.time(),
+            "msg": f"Skipped {t}: no CIK mapping found (may be delisted or not in S&P 500)",
+            "stage": "skip",
+            "level": "summary",
+        })
 
-    thread = threading.Thread(
-        target=_run_pipeline_thread, args=(job_id, ciks), daemon=True
-    )
-    thread.start()
+    job = {
+        "status": "running",
+        "tickers": valid,
+        "skipped": unknown,
+        "error": None,
+        "logs": initial_logs,
+        "current_stage": "",
+    }
+    _save_job(job_id, job)
 
-    return json_response({"job_id": job_id, "status": "running", "tickers": tickers})
+    _run_pipeline_subprocess(job_id, ciks)
+
+    resp = {"job_id": job_id, "status": "running", "tickers": valid}
+    if unknown:
+        resp["skipped"] = unknown
+        resp["warning"] = f"Skipped {', '.join(unknown)}: no CIK mapping found"
+    return json_response(resp)
 
 
 @app.route("/api/pipeline/status/<job_id>")
 def api_pipeline_status(job_id):
-    with _pipeline_lock:
-        job = _pipeline_jobs.get(job_id)
-
+    job = _load_job(job_id)
     if not job:
         return json_response({"error": "job not found"}, 404)
 
-    return json_response({"job_id": job_id, **job})
+    return json_response({
+        "job_id": job_id,
+        "status": job["status"],
+        "tickers": job["tickers"],
+        "error": job["error"],
+        "current_stage": job.get("current_stage", ""),
+        "log_count": len(job.get("logs", [])),
+    })
 
 
+# GET /api/pipeline/logs/<job_id>  –  SSE stream of pipeline log messages
+@app.route("/api/pipeline/logs/<job_id>")
+def api_pipeline_logs(job_id):
+    def generate():
+        last_index = 0
+        while True:
+            job = _load_job(job_id)
+            if not job:
+                yield f"data: {json.dumps({'type': 'error', 'msg': 'job not found'})}\n\n"
+                return
 
-_backtest_cache: dict | None = None
-_backtest_lock = threading.Lock()
+            logs = job.get("logs", [])
+            new_logs = logs[last_index:]
+            status = job["status"]
 
+            for entry in new_logs:
+                yield f"data: {json.dumps({'type': 'log', **entry})}\n\n"
+                last_index += 1
 
-@app.route("/api/backtest")
-def api_backtest():
-    """Return pre-computed backtest validation metrics (IC, quintiles, hit rates, simulations)."""
-    global _backtest_cache
+            if status in ("completed", "failed"):
+                yield f"data: {json.dumps({'type': 'done', 'status': status, 'error': job.get('error')})}\n\n"
+                return
 
-    force = request.args.get("force", "0") == "1"
+            time.sleep(0.5)
 
-    with _backtest_lock:
-        if _backtest_cache and not force:
-            return json_response(_backtest_cache)
-
-    db = _get_db()
-    try:
-        df = load_backtest_data(db)
-        if df.empty:
-            return json_response({"error": "no scored filings — run the pipeline first"}, 404)
-
-        df = enrich_with_forward_returns(df)
-        df = assign_signals(df)
-
-        ic_df = compute_ic(df)
-        comp_ic_df = compute_component_ic(df)
-        quint_df = quintile_analysis(df)
-        hit_df = signal_hit_rate(df)
-
-        sims = {}
-        for h in [30, 60, 90, 180]:
-            sim = portfolio_simulation(df, h)
-            sims[str(h)] = {k: v for k, v in sim.items() if k != "equity_curve"}
-
-        result = {
-            "n_filings": len(df),
-            "n_tickers": int(df["ticker"].nunique()),
-            "ic": ic_df.to_dict("records"),
-            "component_ic": comp_ic_df.to_dict("records"),
-            "quintiles": quint_df.to_dict("records"),
-            "signal_hit_rates": hit_df.to_dict("records"),
-            "portfolio_simulations": sims,
-            "signal_distribution": df["signal"].value_counts().to_dict(),
-        }
-
-        with _backtest_lock:
-            _backtest_cache = result
-
-        return json_response(result)
-    finally:
-        db.close()
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

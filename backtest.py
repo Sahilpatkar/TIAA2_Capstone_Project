@@ -42,10 +42,16 @@ _SIGNAL_DIRECTION = {
 # Forward return computation
 # ---------------------------------------------------------------------------
 
-def _fetch_prices(ticker: str, start: str, end: str) -> pd.Series:
-    """Fetch adjusted close prices from Yahoo Finance."""
-    with contextlib.redirect_stderr(io.StringIO()):
-        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+def _fetch_prices(ticker: str, start: str, end: str, max_retries: int = 3) -> pd.Series:
+    """Fetch adjusted close prices from Yahoo Finance with retry on transient failure."""
+    import time as _time
+    for attempt in range(max_retries):
+        with contextlib.redirect_stderr(io.StringIO()):
+            data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+        if not data.empty:
+            break
+        if attempt < max_retries - 1:
+            _time.sleep(1.5 * (attempt + 1))
     if data.empty:
         return pd.Series(dtype=float)
     close = data["Close"].squeeze()
@@ -112,7 +118,11 @@ def compute_forward_returns(
 # ---------------------------------------------------------------------------
 
 def load_backtest_data(db: LASStore | None = None) -> pd.DataFrame:
-    """Load all scored filings and attach forward returns."""
+    """Load all scored filings and attach forward returns.
+
+    Respects config.UNIVERSE_MODE — only loads filings for tickers in the
+    active universe (50 demo tickers or full 500 S&P).
+    """
     own_db = db is None
     if own_db:
         db = LASStore()
@@ -121,6 +131,9 @@ def load_backtest_data(db: LASStore | None = None) -> pd.DataFrame:
     finally:
         if own_db:
             db.close()
+
+    universe_tickers = set(config.CIK_TO_TICKER.values())
+    df = df[df["ticker"].isin(universe_tickers)]
 
     required = ["ticker", "filed_date", "las", "change_intensity", "attention_proxy", "car"]
     df = df.dropna(subset=required)

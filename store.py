@@ -462,7 +462,8 @@ class LASStore:
     def get_latest_by_ticker(self, ticker: str) -> dict | None:
         p = self._p()
         return self._fetchone(
-            f"SELECT * FROM filings WHERE ticker = {p} ORDER BY report_date DESC LIMIT 1",
+            f"SELECT * FROM filings WHERE ticker = {p} AND report_date IS NOT NULL "
+            f"ORDER BY report_date DESC LIMIT 1",
             (ticker.upper(),),
         )
 

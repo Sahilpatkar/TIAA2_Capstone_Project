@@ -24,4 +24,4 @@ EXPOSE 5001
 
 WORKDIR /app/dashboard/backend
 
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "-w", "2", "--threads", "4", "-b", "0.0.0.0:5001", "--timeout", "300", "--preload", "app:app"]

@@ -8,14 +8,18 @@ const RISK_COLORS = {
 
 function Sidebar({
   tickerMeta,
+  allTickerMeta,
   selected,
   onAnalyze,
+  onProcessTicker,
+  pipelineJobs,
   portfolioLas,
   clients,
   activeClient,
   onSelectClient,
   onNewClient,
   onEditClient,
+  onCloseMobile,
 }) {
   const tickers = useMemo(() => tickerMeta.map(t => t.ticker), [tickerMeta]);
 
@@ -43,6 +47,25 @@ function Sidebar({
       ])
       .filter(([, sectorTickers]) => sectorTickers.length > 0);
   }, [sectorGroups, search]);
+
+  // Unprocessed tickers matching search (from full universe)
+  const processedSet = useMemo(() => new Set(tickers), [tickers]);
+  const unprocessedResults = useMemo(() => {
+    if (!search.trim() || !allTickerMeta || allTickerMeta.length === 0) return [];
+    const q = search.trim().toLowerCase();
+    return allTickerMeta.filter(
+      t => !t.processed && t.ticker.toLowerCase().includes(q)
+    );
+  }, [search, allTickerMeta]);
+
+  const processingTickers = useMemo(() => {
+    if (!pipelineJobs) return new Set();
+    const s = new Set();
+    for (const job of pipelineJobs) {
+      if (job.status === 'running') job.tickers.forEach(t => s.add(t));
+    }
+    return s;
+  }, [pipelineJobs]);
 
   useEffect(() => {
     if (activeClient) {
@@ -104,6 +127,13 @@ function Sidebar({
 
   return (
     <nav className="sidebar">
+      <button
+        className="sidebar-close-mobile"
+        onClick={onCloseMobile}
+        aria-label="Close menu"
+      >
+        {'\u2715'}
+      </button>
       <h2>LazyPrices</h2>
       <p className="brand-sub">Advisor Dashboard</p>
 
@@ -184,7 +214,7 @@ function Sidebar({
       <input
         className="ticker-search"
         type="text"
-        placeholder="Search tickers..."
+        placeholder="Search S&P 500 tickers..."
         value={search}
         onChange={e => setSearch(e.target.value)}
       />
@@ -231,9 +261,30 @@ function Sidebar({
             </div>
           );
         })}
-        {tickers.length === 0 && (
+        {unprocessedResults.length > 0 && (
+          <div className="unprocessed-section">
+            <div className="unprocessed-header">Available to Process</div>
+            {unprocessedResults.map(item => (
+              <div key={item.ticker} className="ticker-item unprocessed">
+                <span className="unprocessed-ticker">{item.ticker}</span>
+                <span className="unprocessed-sector">{item.sector}</span>
+                {processingTickers.has(item.ticker) ? (
+                  <span className="unprocessed-badge processing">Processing...</span>
+                ) : (
+                  <button
+                    className="unprocessed-process-btn"
+                    onClick={() => onProcessTicker && onProcessTicker(item.ticker)}
+                  >
+                    Process
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {tickers.length === 0 && !search.trim() && (
           <p style={{ fontSize: 12, color: '#718096', padding: 8 }}>
-            No tickers in database. Run the pipeline first.
+            No tickers in database. Search and process tickers to get started.
           </p>
         )}
       </div>

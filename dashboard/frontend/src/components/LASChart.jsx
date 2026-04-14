@@ -3,9 +3,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, ReferenceLine
 } from 'recharts';
 
-const W_CHANGE = 0.50;
-const W_ATTENTION = 0.25;
-const W_CAR = 0.25;
+const W_CHANGE = 0.60;
+const W_ATTENTION = 0.30;
+const W_CAR = 0.10;
 
 const COLORS = ['#4361ee', '#06d6a0', '#ef476f', '#ffd166', '#118ab2', '#7209b7', '#f72585'];
 
@@ -33,7 +33,7 @@ function LASChart({ filings }) {
           las: Number(f.las),
           change_contrib: W_CHANGE * nc,
           attention_contrib: -(W_ATTENTION * na),
-          car_contrib: W_CAR * ncar,
+          car_contrib: -(W_CAR * ncar),
         };
       })
       .sort((a, b) => b.las - a.las);
