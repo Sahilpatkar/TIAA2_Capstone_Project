@@ -1610,6 +1610,9 @@ th .col-tip {
   .holdings-header { flex-wrap: wrap; gap: 8px; }
   .holdings-table { min-width: 560px; }
   .filings-table { min-width: 640px; }
+  .table-card { padding: 16px; }
+  .ticker-group { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; }
+  .ticker-group-header { position: sticky; left: 0; }
 
   /* Section diffs stack */
   .section-diff-grid { grid-template-columns: 1fr; }
