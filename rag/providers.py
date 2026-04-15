@@ -119,6 +119,7 @@ class VectorStoreProvider(ABC):
         query_embedding: list[float],
         top_k: int = 5,
         where: dict | None = None,
+        where_document: dict | None = None,
     ) -> list[dict]:
         """Return top-K results as list of {id, document, metadata, distance}."""
 
@@ -163,6 +164,7 @@ class ChromaVectorStore(VectorStoreProvider):
         query_embedding: list[float],
         top_k: int = 5,
         where: dict | None = None,
+        where_document: dict | None = None,
     ) -> list[dict]:
         kwargs: dict[str, Any] = {
             "query_embeddings": [query_embedding],
@@ -171,6 +173,8 @@ class ChromaVectorStore(VectorStoreProvider):
         }
         if where:
             kwargs["where"] = where
+        if where_document:
+            kwargs["where_document"] = where_document
 
         results = self._collection.query(**kwargs)
 

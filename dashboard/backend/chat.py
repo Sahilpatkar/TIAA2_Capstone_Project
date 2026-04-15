@@ -11,6 +11,7 @@ when the required packages are missing.
 
 import json
 import os
+import re
 import sys
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -32,6 +33,9 @@ _SYSTEM_PROMPT = (
     "- When citing filing text, mention the ticker, section, and report date\n"
     "- Explain what the metrics mean in practical terms for an advisor\n"
     "- If the data doesn't cover something, say so clearly\n"
+    "- When the user asks for filing excerpts or detailed text, quote the retrieved "
+    "passages verbatim and cite them with [ticker | section | report_date]. "
+    "If the retrieved excerpts don't cover what was asked, say so explicitly.\n"
 )
 
 
@@ -86,6 +90,43 @@ def _build_context(tickers: list[str]) -> str:
 # RAG retrieval
 # ------------------------------------------------------------------
 
+_SECTION_KEYWORD_MAP = [
+    (r"\brisk\s*factors?\b", "item_1a"),
+    (r"\bmd&a\b", "item_7"),
+    (r"\bmanagement('?s)?\s+discussion\b", "item_7"),
+    (r"\blegal\s+proceedings?\b", "item_3"),
+    (r"\bproperties\b", "item_2"),
+    (r"\bbusiness\s+overview\b", "item_1"),
+]
+
+
+def _infer_section_keys(query: str) -> list[str]:
+    """Detect explicit 'Item X' references or topic keywords in a user query.
+
+    Returns a list of normalized section_key values (e.g. 'item_1a'). Handles
+    'Item 1A', 'Item 1 A', 'item1a', plus keyword aliases like 'risk factors'.
+    """
+    keys: list[str] = []
+    for m in re.finditer(r"\bitem\s*(\d{1,2})\s*([a-z])?\b", query, re.IGNORECASE):
+        num = m.group(1)
+        letter = (m.group(2) or "").lower()
+        keys.append(f"item_{num}{letter}")
+    for pattern, key in _SECTION_KEYWORD_MAP:
+        if re.search(pattern, query, re.IGNORECASE) and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _build_retrieval_query(message: str, history: list[dict]) -> str:
+    """Concatenate recent user turns so follow-ups retrieve the right chunks."""
+    recent_user_turns = [
+        h.get("content", "") for h in history[-6:]
+        if h.get("role") == "user" and h.get("content")
+    ]
+    parts = recent_user_turns[-2:] + [message]
+    return "\n".join(p for p in parts if p)
+
+
 def _retrieve_rag_context(query: str, tickers: list[str]) -> str:
     """Embed the query and retrieve relevant filing chunks from the vector store."""
     try:
@@ -102,21 +143,47 @@ def _retrieve_rag_context(query: str, tickers: list[str]) -> str:
 
         query_embedding = embedder.embed([query])[0]
 
-        where_filter = None
+        where_filter: dict | None = None
+        clauses: list[dict] = []
         if tickers and len(tickers) == 1:
-            where_filter = {"ticker": tickers[0]}
+            clauses.append({"ticker": tickers[0]})
         elif tickers and len(tickers) > 1:
-            where_filter = {"ticker": {"$in": tickers}}
+            clauses.append({"ticker": {"$in": tickers}})
+
+        section_keys = _infer_section_keys(query)
+        if section_keys:
+            if len(section_keys) == 1:
+                clauses.append({"section_key": section_keys[0]})
+            else:
+                clauses.append({"section_key": {"$in": section_keys}})
+
+        if len(clauses) == 1:
+            where_filter = clauses[0]
+        elif len(clauses) > 1:
+            where_filter = {"$and": clauses}
 
         top_k = getattr(config, "RAG_TOP_K", 5)
-        results = store.search(
-            query_embedding=query_embedding,
-            top_k=top_k,
-            where=where_filter,
-        )
+        # Exclude 10-Q Item 1A boilerplate stubs that just reference the 10-K.
+        where_document = {"$not_contains": "Refer to Part I, Item 1A"}
+        try:
+            results = store.search(
+                query_embedding=query_embedding,
+                top_k=top_k * 4,
+                where=where_filter,
+                where_document=where_document,
+            )
+        except TypeError:
+            results = store.search(
+                query_embedding=query_embedding,
+                top_k=top_k * 4,
+                where=where_filter,
+            )
 
         if not results:
             return ""
+
+        substantive = [r for r in results if len(r.get("document", "")) >= 600]
+        results = (substantive or results)[:top_k]
 
         passages: list[str] = []
         for r in results:
@@ -127,8 +194,6 @@ def _retrieve_rag_context(query: str, tickers: list[str]) -> str:
                 f"{meta.get('report_date', '?')}]"
             )
             text = r.get("document", "")
-            if len(text) > 1500:
-                text = text[:1500] + "..."
             passages.append(f"{header}\n{text}")
 
         return "\n\n---\n\n".join(passages)
@@ -215,7 +280,8 @@ def handle_chat(
     rag_context = ""
     rag_enabled = getattr(config, "RAG_ENABLED", False)
     if rag_enabled:
-        rag_context = _retrieve_rag_context(message, tickers)
+        retrieval_query = _build_retrieval_query(message, history)
+        rag_context = _retrieve_rag_context(retrieval_query, tickers)
 
     client_preamble = ""
     if client_name:
