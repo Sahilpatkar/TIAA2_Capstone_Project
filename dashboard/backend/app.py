@@ -207,6 +207,110 @@ def api_sections_summarize():
     return json_response(result)
 
 
+# POST /api/sections/analyze  –  free-form per-section summary+sentiment
+# Body: {ticker, section, accession?}
+# Loads the ticker's filings, picks current (accession if provided else latest)
+# and its immediate predecessor, pulls the requested section text from each
+# filing's cleaned_text_path, and runs the same summarize_section_change
+# pipeline. Unlike /api/sections/summarize this works for ANY section key, not
+# just those pre-cached into section_changes_json.
+_ANALYZE_SNIPPET_CHARS = 2000
+
+
+def _load_section_text(cleaned_path: str, section_key: str) -> str | None:
+    if not cleaned_path or not os.path.exists(cleaned_path):
+        return None
+    try:
+        with open(cleaned_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    sections = data.get("sections", {}) or {}
+    text = sections.get(section_key)
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text.strip()
+
+
+@app.route("/api/sections/analyze", methods=["POST"])
+def api_sections_analyze():
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get("ticker") or "").strip().upper()
+    section = (body.get("section") or "").strip()
+    accession = (body.get("accession") or "").strip() or None
+    if not ticker or not section:
+        return json_response({"error": "ticker and section are required"}, 400)
+
+    db = _get_db()
+    try:
+        df = db.get_filings_by_tickers([ticker])
+        if df.empty:
+            return json_response({"error": f"no filings found for {ticker}"}, 404)
+
+        df = df.sort_values("report_date", ascending=False).reset_index(drop=True)
+
+        if accession:
+            norm = accession.replace("-", "")
+            match_idx = df.index[
+                (df["accession"] == accession)
+                | (df["accession"].str.replace("-", "") == norm)
+            ]
+            if len(match_idx) == 0:
+                return json_response({"error": "accession not found for ticker"}, 404)
+            current_idx = int(match_idx[0])
+        else:
+            current_idx = 0
+
+        if current_idx + 1 >= len(df):
+            return json_response(
+                {"error": "no prior filing to compare against"}, 400
+            )
+
+        current_row = df.iloc[current_idx]
+        prior_row = df.iloc[current_idx + 1]
+
+        text_new = _load_section_text(current_row.get("cleaned_text_path"), section)
+        text_old = _load_section_text(prior_row.get("cleaned_text_path"), section)
+
+        if text_new is None and text_old is None:
+            return json_response(
+                {"error": f"section '{section}' not found in either filing"}, 400
+            )
+        if text_new is None:
+            return json_response(
+                {"error": f"section '{section}' missing from current filing"}, 400
+            )
+        if text_old is None:
+            return json_response(
+                {"error": f"section '{section}' missing from prior filing"}, 400
+            )
+
+        snippet_old = text_old[:_ANALYZE_SNIPPET_CHARS]
+        snippet_new = text_new[:_ANALYZE_SNIPPET_CHARS]
+
+        result = summarize_section_change(ticker, section, snippet_old, snippet_new)
+
+        return json_response({
+            "ticker": ticker,
+            "section": section,
+            "current": {
+                "accession": current_row.get("accession"),
+                "report_date": str(current_row.get("report_date") or ""),
+                "form": current_row.get("form"),
+            },
+            "prior": {
+                "accession": prior_row.get("accession"),
+                "report_date": str(prior_row.get("report_date") or ""),
+                "form": prior_row.get("form"),
+            },
+            "snippet_old": snippet_old,
+            "snippet_new": snippet_new,
+            **result,
+        })
+    finally:
+        db.close()
+
+
 # GET /api/risk-narrative?tickers=AAPL,JPM  –  LLM risk summary
 @app.route("/api/risk-narrative")
 def api_risk_narrative():

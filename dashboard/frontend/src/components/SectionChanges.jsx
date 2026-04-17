@@ -83,8 +83,18 @@ function SectionChanges({ sections }) {
                   )}
                   {summary && !loadingSummary[i] && (
                     <div className="section-summary">
-                      {summary.is_template && <span className="template-badge">Template</span>}
+                      <div>
+                        {summary.sentiment && (
+                          <span className={`sentiment-pill ${summary.sentiment}`}>
+                            {summary.sentiment === 'unknown' ? 'Unscored' : summary.sentiment}
+                          </span>
+                        )}
+                        {summary.is_template && <span className="template-badge">Template</span>}
+                      </div>
                       <p>{summary.summary}</p>
+                      {summary.sentiment_rationale && (
+                        <div className="sentiment-rationale">{summary.sentiment_rationale}</div>
+                      )}
                     </div>
                   )}
                   {!hasOld && !loadingSummary[i] && !summary && (

@@ -9,6 +9,7 @@ import Sidebar from './components/Sidebar';
 import PortfolioOverview from './components/PortfolioOverview';
 import FilingsTable from './components/FilingsTable';
 import SectionChanges from './components/SectionChanges';
+import SectionExplorer from './components/SectionExplorer';
 import LASChart from './components/LASChart';
 import SimilarityChart from './components/SimilarityChart';
 import LASvsCAR from './components/LASvsCAR';
@@ -297,6 +298,8 @@ function App() {
             <FilingsTable filings={filings} />
 
             <SectionChanges sections={sections} />
+
+            <SectionExplorer tickers={selectedTickers} />
           </>
         )}
 

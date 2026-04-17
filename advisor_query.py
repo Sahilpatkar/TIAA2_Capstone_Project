@@ -283,14 +283,26 @@ def summarize_section_change(
     snippet_old: str,
     snippet_new: str,
 ) -> dict:
-    """Return ``{"summary": str, "is_template": bool}`` describing what changed."""
+    """Summarize a section diff and classify its sentiment.
+
+    Returns ``{"summary", "sentiment", "sentiment_rationale", "is_template"}``.
+    ``sentiment`` is one of ``"positive"``, ``"negative"``, ``"neutral"``, or
+    ``"unknown"`` (template fallback / no API key).
+    """
     if not snippet_old and not snippet_new:
-        return {"summary": "No text available for comparison.", "is_template": True}
+        return {
+            "summary": "No text available for comparison.",
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
+            "is_template": True,
+        }
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return {
             "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
             "is_template": True,
         }
 
@@ -299,6 +311,8 @@ def summarize_section_change(
     except ImportError:
         return {
             "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
             "is_template": True,
         }
 
@@ -309,18 +323,30 @@ def summarize_section_change(
             "role": "system",
             "content": (
                 "You are a financial analyst assistant. Given old and new text "
-                "from a specific section of an SEC 10-K filing, write a brief "
-                "(2-4 sentence) plain-English summary of what materially changed. "
-                "Focus on substance — new risks, removed disclosures, changed "
-                "figures, product launches — not formatting differences."
+                "from a specific section of an SEC filing (10-K or 10-Q), analyze "
+                "what materially changed between the two periods and return a "
+                "JSON object with exactly these three fields:\n"
+                '  "summary": a 2-4 sentence plain-English summary of what '
+                "substantively changed — new risks, removed disclosures, changed "
+                "figures, product launches. Ignore formatting differences.\n"
+                '  "sentiment": one of "positive", "negative", or "neutral". '
+                "Judge the DIRECTIONAL implication for the company's prospects — "
+                "improving margins, new products, resolved litigation are positive; "
+                "new material risks, lost customers, weakening guidance are "
+                "negative. Return \"neutral\" for purely structural, boilerplate, "
+                'or mixed changes. Do NOT treat the mere existence of "risk '
+                'factors" wording as inherently negative.\n'
+                '  "sentiment_rationale": one short sentence (under 25 words) '
+                "explaining why you chose that label, citing the specific change.\n"
+                "Return only the JSON object, nothing else."
             ),
         },
         {
             "role": "user",
             "content": (
                 f"Ticker: {ticker}\nSection: {pretty}\n\n"
-                f"--- PRIOR YEAR ---\n{snippet_old}\n\n"
-                f"--- CURRENT YEAR ---\n{snippet_new}"
+                f"--- PRIOR PERIOD ---\n{snippet_old}\n\n"
+                f"--- CURRENT PERIOD ---\n{snippet_new}"
             ),
         },
     ]
@@ -330,15 +356,34 @@ def summarize_section_change(
             model=config.LLM_MODEL,
             messages=messages,
             temperature=0.2,
-            max_tokens=300,
+            max_tokens=400,
+            response_format={"type": "json_object"},
         )
+        raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
+        sentiment = str(parsed.get("sentiment", "neutral")).strip().lower()
+        if sentiment not in {"positive", "negative", "neutral"}:
+            sentiment = "neutral"
         return {
-            "summary": response.choices[0].message.content.strip(),
+            "summary": str(parsed.get("summary", "")).strip() or _template_section_summary(
+                ticker, section, snippet_old, snippet_new
+            ),
+            "sentiment": sentiment,
+            "sentiment_rationale": str(parsed.get("sentiment_rationale", "")).strip(),
+            "is_template": False,
+        }
+    except json.JSONDecodeError:
+        return {
+            "summary": raw,
+            "sentiment": "neutral",
+            "sentiment_rationale": "",
             "is_template": False,
         }
     except Exception:
         return {
             "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
             "is_template": True,
         }
 

@@ -104,3 +104,11 @@ export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippe
     snippet_new,
   }).then(r => r.data);
 }
+
+export function analyzeSection({ ticker, section, accession }) {
+  return API.post('/sections/analyze', {
+    ticker,
+    section,
+    accession: accession || null,
+  }).then(r => r.data);
+}
