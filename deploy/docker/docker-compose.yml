@@ -60,7 +60,7 @@ services:
       postgres:
         condition: service_healthy
     working_dir: /app
-    entrypoint: ["python", "run_pipeline.py"]
+    entrypoint: ["tiaa-pipeline"]
     profiles:
       - pipeline
 

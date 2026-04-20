@@ -28,8 +28,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
-import config
-from document_pull import (
+from tiaa import config
+from tiaa.pipeline.document_pull import (
     cik10,
     filing_primary_doc_url,
     get_10k_filings_for_cik,
@@ -38,13 +38,13 @@ from document_pull import (
     output_dir_for_entity,
     sec_get,
 )
-from extract_clean import process_entity_dir
-from embeddings import build_vectors, save_vectors
-from similarity import compute_similarity
-from attention_proxy import get_attention_proxy
-from abnormal_returns import compute_car, resolve_ticker
-from las import compute_las, compute_section_las, weighted_change_intensity
-from store import LASStore, _normalize_accession
+from tiaa.pipeline.extract_clean import process_entity_dir
+from tiaa.storage.embeddings import build_vectors, save_vectors
+from tiaa.analysis.similarity import compute_similarity
+from tiaa.analysis.attention_proxy import get_attention_proxy
+from tiaa.analysis.abnormal_returns import compute_car, resolve_ticker
+from tiaa.analysis.las import compute_las, compute_section_las, weighted_change_intensity
+from tiaa.storage.store import LASStore, _normalize_accession
 
 log = logging.getLogger("pipeline")
 

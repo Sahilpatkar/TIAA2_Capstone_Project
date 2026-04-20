@@ -19,7 +19,7 @@ from nltk.stem import WordNetLemmatizer
 from scipy import sparse
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
-import config
+from tiaa import config
 
 # Best-effort NLTK data download; SSL issues on some systems are non-fatal.
 for _pkg in ("stopwords", "wordnet", "omw-1.4"):

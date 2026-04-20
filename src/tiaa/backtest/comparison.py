@@ -21,8 +21,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-import config
-from backtest import (
+from tiaa import config
+from tiaa.backtest.core import (
     FORWARD_HORIZONS,
     load_backtest_data,
     enrich_with_forward_returns,

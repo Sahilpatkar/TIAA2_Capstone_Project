@@ -22,9 +22,9 @@ import pandas as pd
 import yfinance as yf
 from scipy import stats
 
-import config
-from signals import compute_signal, _compute_z_scores_for_group, _z_confidence
-from store import LASStore
+from tiaa import config
+from tiaa.analysis.signals import compute_signal, _compute_z_scores_for_group, _z_confidence
+from tiaa.storage.store import LASStore
 
 
 FORWARD_HORIZONS = [30, 60, 90, 180]

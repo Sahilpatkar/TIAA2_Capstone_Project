@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from numeric_change import (
+from tiaa.analysis.numeric_change import (
     extract_financial_numbers,
     match_numbers,
     compute_numerical_divergence,
@@ -261,7 +261,7 @@ class TestHybridIntegration:
         return str(tmp_path)
 
     def test_numbers_only_change_detected(self, entity_dir_numbers_only_change):
-        from similarity import compute_similarity
+        from tiaa.analysis.similarity import compute_similarity
 
         results = compute_similarity(entity_dir_numbers_only_change)
         assert len(results) == 1
@@ -278,7 +278,7 @@ class TestHybridIntegration:
         )
 
     def test_section_level_numerical_divergence(self, entity_dir_numbers_only_change):
-        from similarity import compute_similarity
+        from tiaa.analysis.similarity import compute_similarity
 
         results = compute_similarity(entity_dir_numbers_only_change)
         sc = results[0]["section_changes"]

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiaa"
+version = "0.1.0"
+description = "LazyPrices filing analysis pipeline"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.scripts]
+tiaa-pipeline = "tiaa.pipeline.run:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -18,7 +18,7 @@ import warnings
 
 from bs4 import BeautifulSoup, Comment, XMLParsedAsHTMLWarning
 
-import config
+from tiaa import config
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 

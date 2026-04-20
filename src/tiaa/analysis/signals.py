@@ -17,7 +17,7 @@ import math
 import numpy as np
 import pandas as pd
 
-import config
+from tiaa import config
 
 
 def _zscore(series: pd.Series) -> pd.Series:

@@ -23,7 +23,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-import config
+from tiaa import config
 
 def _rank_normalize(series: pd.Series) -> pd.Series:
     """Cross-sectional rank percentile in [0, 1]."""

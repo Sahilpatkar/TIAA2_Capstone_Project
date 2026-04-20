@@ -7,7 +7,7 @@ percentages, and large bare numbers that bag-of-words text similarity
 completely misses (the tokenizer strips all digits).
 
 Usage:
-    from numeric_change import compute_numerical_divergence
+    from tiaa.analysis.numeric_change import compute_numerical_divergence
     score = compute_numerical_divergence(current_text, prior_text)
     # score in [0, 1]; 0 = identical numbers, 1 = extreme divergence
 """

@@ -5,7 +5,7 @@ Supports PostgreSQL (via psycopg2) when DATABASE_URL is set to a postgresql:// U
 and falls back to SQLite for local development without Docker.
 
 Usage:
-    from store import LASStore
+    from tiaa.storage.store import LASStore
     db = LASStore()
     db.upsert(row_dict)
     rows = db.get_filings_by_tickers(["AAPL", "JPM"])
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-import config
+from tiaa import config
 
 _USE_PG = config.DATABASE_URL.startswith("postgresql://")
 

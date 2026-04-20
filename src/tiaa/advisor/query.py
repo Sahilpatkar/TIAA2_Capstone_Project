@@ -21,9 +21,9 @@ load_dotenv()
 
 import pandas as pd
 
-import config
-from signals import compute_portfolio_signals
-from store import LASStore
+from tiaa import config
+from tiaa.analysis.signals import compute_portfolio_signals
+from tiaa.storage.store import LASStore
 
 
 

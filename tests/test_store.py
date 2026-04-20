@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import pytest
 
-from store import _normalize_accession, LASStore
+from tiaa.storage.store import _normalize_accession, LASStore
 
 
 class TestNormalizeAccession:

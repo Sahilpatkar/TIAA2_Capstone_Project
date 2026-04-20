@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-import config
+from tiaa import config
 
 
 def _yf_download_with_retry(ticker: str, start: str, end: str, max_retries: int = 3) -> pd.DataFrame:

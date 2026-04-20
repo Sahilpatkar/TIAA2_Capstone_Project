@@ -12,14 +12,10 @@ when the required packages are missing.
 import json
 import os
 import re
-import sys
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, PROJECT_ROOT)
-
-import config  # noqa: E402
-from store import LASStore  # noqa: E402
-from advisor_query import aggregate_las, retrieve_high_impact_sections  # noqa: E402
+from tiaa import config
+from tiaa.storage.store import LASStore
+from tiaa.advisor.query import aggregate_las, retrieve_high_impact_sections
 
 _SYSTEM_PROMPT = (
     "You are a financial advisor assistant with expertise in SEC filings analysis. "

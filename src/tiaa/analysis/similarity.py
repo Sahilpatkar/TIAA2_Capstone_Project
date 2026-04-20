@@ -18,9 +18,9 @@ from datetime import datetime
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity as sk_cosine
 
-from embeddings import build_vectors, load_cleaned_filings, tokenize_and_lemmatize
-from numeric_change import compute_numerical_divergence
-import config
+from tiaa.storage.embeddings import build_vectors, load_cleaned_filings, tokenize_and_lemmatize
+from tiaa.analysis.numeric_change import compute_numerical_divergence
+from tiaa import config
 
 _SNIPPET_MAX = 500
 

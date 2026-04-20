@@ -6,7 +6,7 @@ import json
 import requests
 from urllib.parse import urljoin
 
-import config
+from tiaa import config
 
 SEC_DATA = "https://data.sec.gov/"
 SEC_ARCHIVES = "https://www.sec.gov/Archives/"

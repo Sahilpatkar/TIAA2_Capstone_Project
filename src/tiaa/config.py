@@ -1,7 +1,7 @@
 
 import os
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 FILINGS_DIR = os.path.join(DATA_DIR, "filings")
 VECTORS_DIR = os.path.join(DATA_DIR, "vectors")

@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from embeddings import (
+from tiaa.storage.embeddings import (
     tokenize_and_lemmatize,
     load_cleaned_filings,
     build_vectors,

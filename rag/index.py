@@ -12,19 +12,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, PROJECT_ROOT)
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import config  # noqa: E402
-from store import LASStore  # noqa: E402
-from rag.chunker import chunk_filing  # noqa: E402
-from rag.providers import get_embedding_provider, get_vector_store  # noqa: E402
+from tiaa import config
+from tiaa.storage.store import LASStore
+from rag.chunker import chunk_filing
+from rag.providers import get_embedding_provider, get_vector_store
 
 MANIFEST_PATH = os.path.join(
     getattr(config, "RAG_VECTORDB_DIR", os.path.join(config.DATA_DIR, "vectordb")),

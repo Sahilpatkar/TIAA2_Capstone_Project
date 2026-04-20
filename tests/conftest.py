@@ -7,8 +7,8 @@ import tempfile
 import pandas as pd
 import pytest
 
-import config
-from store import LASStore
+from tiaa import config
+from tiaa.storage.store import LASStore
 
 
 @pytest.fixture()

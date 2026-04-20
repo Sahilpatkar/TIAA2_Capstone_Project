@@ -9,7 +9,7 @@ The raw volume ratio is returned here; cross-sectional normalisation
 (rank percentile or z-score) is applied later inside las.py.
 """
 
-from abnormal_returns import compute_volume_ratio
+from tiaa.analysis.abnormal_returns import compute_volume_ratio
 
 
 def get_attention_proxy(ticker: str, filed_date: str) -> float | None:

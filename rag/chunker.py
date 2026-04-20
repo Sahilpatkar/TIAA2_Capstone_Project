@@ -10,12 +10,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, PROJECT_ROOT)
-
-import config  # noqa: E402
+from tiaa import config
 
 SECTION_LABELS = {
     "item_1": "Business",

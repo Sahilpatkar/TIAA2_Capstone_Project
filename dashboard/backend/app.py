@@ -19,13 +19,12 @@ from flask import Flask, request, Response
 from flask_cors import CORS
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, PROJECT_ROOT)
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import config  
-from store import LASStore  
-from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
+from tiaa import config  
+from tiaa.storage.store import LASStore  
+from tiaa.advisor.query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
 from chat import handle_chat  
 app = Flask(__name__)
 CORS(app)
@@ -505,11 +504,9 @@ def _run_pipeline_subprocess(job_id: str, ciks: list[int]):
     cik_csv = ",".join(str(c) for c in ciks)
     script = f"""
 import json, logging, sys, os, time
-# cwd is set to PROJECT_ROOT by the parent process
-sys.path.insert(0, os.getcwd())
 
-import config
-from run_pipeline import run as run_pipeline
+from tiaa import config
+from tiaa.pipeline.run import run as run_pipeline
 
 import re as _re
 
