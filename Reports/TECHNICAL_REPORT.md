@@ -429,8 +429,7 @@ TIAA2_Capstone_Project/
 ├── requirements.txt
 ├── .env                            # OPENAI_API_KEY (optional)
 ├── README.md
-├── TECHNICAL_REPORT.md             # This document
-└── PythonPractice10.ipynb          # Reference notebook (similarity only)
+└── TECHNICAL_REPORT.md             # This document
 ```
 
 ---
@@ -452,14 +451,10 @@ TIAA2_Capstone_Project/
 | Attention proxy is a placeholder | Constant 0.5 for all filings; no discriminating power | Replace with SEC FOIA download log analysis |
 | 10-Q filings not supported | Only 10-K annual reports are processed | Extend `FILING_TYPE` and adjust pairing logic |
 | Count vectors only | TF-IDF and dense embeddings are stubbed but not active | Enable `--dense` flag in `embeddings.py` for sentence-transformers |
-| Limited similarity measures | Only cosine and Jaccard; paper also uses MinEdit and Sim Simple | The reference notebook implements these; can be ported |
+| Limited similarity measures | Only cosine and Jaccard; paper also uses MinEdit and Sim Simple | Port MinEdit and Sim Simple from the LazyPrices paper reference implementation |
 | Single-market CAR model | Market-adjusted model using S&P 500 only | Could add Fama-French factor model |
 | In-memory pipeline jobs | Background job tracking uses a Python dict; lost on server restart | Migrate to a task queue (Celery, Redis) for production |
 | Local vector store | ChromaDB is file-based; single-node only | Provider abstraction supports OpenSearch migration |
-
-### 9.3 Reference Notebook Comparison
-
-The `PythonPractice10.ipynb` notebook is an earlier prototype that implements filing download, text cleaning, and similarity computation for 5 stocks (AXP, AAPL, KO, JPM, V). It computes four similarity measures (cosine, Jaccard, MinEdit, Sim Simple) but does not compute change intensity, attention proxy, CAR, or LAS. The pipeline modules build on the same concepts but extend them into a full scoring system with normalization, persistence, and a web interface.
 
 ---
 

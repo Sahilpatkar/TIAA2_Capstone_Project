@@ -70,7 +70,7 @@ _lemmatizer = _get_lemmatizer()
 
 
 
-# Text pre-processing (aligned with PythonPractice10 notebook)
+# Text pre-processing
 
 
 def tokenize_and_lemmatize(text: str, remove_stopwords: bool = True) -> str:
