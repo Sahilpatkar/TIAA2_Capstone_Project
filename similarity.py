@@ -19,12 +19,22 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity as sk_cosine
 
 from embeddings import build_vectors, load_cleaned_filings, tokenize_and_lemmatize
+from numeric_change import compute_numerical_divergence
 import config
 
+_SNIPPET_MAX = 500
 
-# ---------------------------------------------------------------------------
+
+def _snippet(text: str, max_len: int = _SNIPPET_MAX) -> str:
+    """Truncate *text* to *max_len* chars, appending '...' when trimmed."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+# 
 # Filing metadata extraction
-# ---------------------------------------------------------------------------
+# 
 
 _DATE_RE = re.compile(r"(\d{4})(\d{2})(\d{2})")
 
@@ -57,15 +67,27 @@ def _parse_date(date_str: str) -> datetime | None:
         return None
 
 
-# ---------------------------------------------------------------------------
+# 
 # Pairing
-# ---------------------------------------------------------------------------
+# 
 
-def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
+def pair_filings(
+    filings: list[dict],
+    day_range: tuple[int, int] | None = None,
+) -> list[tuple[dict, dict]]:
     """
-    Pair each filing with its prior-year counterpart.
+    Pair each filing with its prior counterpart.
+
+    *day_range* is (min_days, max_days) between report dates.  Defaults to
+    the 10-K annual range (200, 550).  For 10-Q quarterly filings, pass
+    (60, 150) via ``config.PAIRING_DAY_RANGE["10-Q"]``.
+
     Returns list of (current, prior) tuples sorted by report date descending.
     """
+    if day_range is None:
+        day_range = getattr(config, "PAIRING_DAY_RANGE", {}).get("10-K", (200, 550))
+    min_days, max_days = day_range
+
     dated = []
     for f in filings:
         rd = _report_date_from_basename(f["_basename"])
@@ -74,7 +96,6 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
             dated.append(f)
 
     if len(dated) < 2:
-        # Fallback: if we have 2+ filings but no report dates parsed, pair by basename order
         if len(filings) >= 2:
             sorted_f = sorted(filings, key=lambda x: x["_basename"])
             return [(sorted_f[i], sorted_f[i - 1]) for i in range(1, len(sorted_f))]
@@ -85,18 +106,31 @@ def pair_filings(filings: list[dict]) -> list[tuple[dict, dict]]:
     pairs = []
     for i in range(1, len(dated)):
         current = dated[i]
-        prior = dated[i - 1]
         cur_dt = _parse_date(current["_report_date"])
-        pri_dt = _parse_date(prior["_report_date"])
-        if cur_dt and pri_dt and 200 < (cur_dt - pri_dt).days < 550:
-            pairs.append((current, prior))
+        if not cur_dt:
+            continue
+        best_prior = None
+        best_gap = max_days + 1
+        for j in range(i - 1, -1, -1):
+            prior = dated[j]
+            pri_dt = _parse_date(prior["_report_date"])
+            if not pri_dt:
+                continue
+            gap = (cur_dt - pri_dt).days
+            if gap >= max_days:
+                break
+            if min_days < gap < max_days and gap < best_gap:
+                best_prior = prior
+                best_gap = gap
+        if best_prior is not None:
+            pairs.append((current, best_prior))
 
     return pairs
 
 
-# ---------------------------------------------------------------------------
+# 
 # Similarity measures
-# ---------------------------------------------------------------------------
+# 
 
 def cosine_sim(v1, v2) -> float:
     """Cosine similarity between two sparse or dense vectors."""
@@ -115,14 +149,32 @@ def jaccard_sim(text1: str, text2: str) -> float:
     return len(intersection) / len(union) if union else 1.0
 
 
-# ---------------------------------------------------------------------------
+# 
 # Main computation
-# ---------------------------------------------------------------------------
+# 
+
+def _blend_change_intensity(
+    text_sim: float | None,
+    num_div: float,
+    alpha: float,
+) -> float | None:
+    """Combine text-based change with numerical divergence.
+
+    change_intensity = alpha * (1 - text_sim) + (1 - alpha) * num_div
+    """
+    if text_sim is None:
+        return None
+    text_change = 1.0 - text_sim
+    return alpha * text_change + (1.0 - alpha) * num_div
+
 
 def compute_similarity(entity_dir: str) -> list[dict]:
     """
     Compute document-level and section-level similarity for all
     consecutive filing pairs in *entity_dir*.
+
+    The change_intensity is a hybrid of text similarity and numerical
+    divergence, controlled by ``config.NUMERIC_CHANGE_ALPHA``.
     """
     filings = load_cleaned_filings(entity_dir)
     cleaned_dir = os.path.join(entity_dir, "cleaned")
@@ -133,6 +185,8 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     vec_result = build_vectors(entity_dir, use_tfidf=False, remove_stopwords=True)
     doc_vectors = vec_result["doc_vectors"]
     section_vectors = vec_result["section_vectors"]
+
+    alpha = config.NUMERIC_CHANGE_ALPHA
 
     pairs = pair_filings(filings)
     if not pairs and len(filings) >= 2:
@@ -150,7 +204,10 @@ def compute_similarity(entity_dir: str) -> list[dict]:
         jac = jaccard_sim(current["full_text"], prior["full_text"])
 
         primary_sim = cos if cos is not None else jac
-        change_intensity = 1.0 - primary_sim if primary_sim is not None else None
+        doc_num_div = compute_numerical_divergence(
+            current["full_text"], prior["full_text"],
+        )
+        change_intensity = _blend_change_intensity(primary_sim, doc_num_div, alpha)
 
         # Section-level changes
         section_changes = []
@@ -170,11 +227,20 @@ def compute_similarity(entity_dir: str) -> list[dict]:
 
             sec_jac = jaccard_sim(cur_sections[sec_key], pri_sections[sec_key])
             sec_sim = sec_cos if sec_cos is not None else sec_jac
+
+            sec_num_div = compute_numerical_divergence(
+                cur_sections[sec_key], pri_sections[sec_key],
+            )
+            sec_ci = _blend_change_intensity(sec_sim, sec_num_div, alpha)
+
             section_changes.append({
                 "section": sec_key,
                 "similarity_cosine": round(sec_cos, 6) if sec_cos is not None else None,
                 "similarity_jaccard": round(sec_jac, 6),
-                "change_intensity": round(1.0 - sec_sim, 6) if sec_sim is not None else None,
+                "numerical_divergence": round(sec_num_div, 6),
+                "change_intensity": round(sec_ci, 6) if sec_ci is not None else None,
+                "snippet_old": _snippet(pri_sections[sec_key]),
+                "snippet_new": _snippet(cur_sections[sec_key]),
             })
 
         section_changes.sort(key=lambda s: s["change_intensity"] or 0, reverse=True)
@@ -186,6 +252,7 @@ def compute_similarity(entity_dir: str) -> list[dict]:
             "prior_report_date": prior.get("_report_date"),
             "similarity_cosine": round(cos, 6) if cos is not None else None,
             "similarity_jaccard": round(jac, 6),
+            "numerical_divergence": round(doc_num_div, 6),
             "change_intensity": round(change_intensity, 6) if change_intensity is not None else None,
             "section_changes": section_changes,
         })
@@ -193,9 +260,9 @@ def compute_similarity(entity_dir: str) -> list[dict]:
     return results
 
 
-# ---------------------------------------------------------------------------
+# 
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Compute filing similarity and change intensity")

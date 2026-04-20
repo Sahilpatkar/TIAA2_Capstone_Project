@@ -47,24 +47,27 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
                                        │
                                embeddings.py (count vectors)
                                        │
-                 ┌─────────────────────┼─────────────────────┐
-           similarity.py        attention_proxy.py    abnormal_returns.py
-           (cosine/Jaccard)     (placeholder 0.5)     (Yahoo Finance CAR)
-                 └─────────────────────┼─────────────────────┘
+          ┌────────────────────────────┼────────────────────────────┐
+    similarity.py           numeric_change.py           abnormal_returns.py
+    (cosine/Jaccard)        (numerical divergence)      (Yahoo Finance CAR)
+          │                 attention_proxy.py                      │
+          │                 (placeholder 0.5)                       │
+          └────────────────────────────┼────────────────────────────┘
                                        │
-                                    las.py (Lazy Attention Score)
+                          las.py (Lazy Attention Score)
                                        │
-                                    store.py (PostgreSQL / SQLite)
+                          store.py (PostgreSQL / SQLite)
                                        │
-                               advisor_query.py
-                          (portfolio aggregation + LLM narrative)
+                    ┌──────────────────┼──────────────────┐
+              signals.py         advisor_query.py       backtest.py
+              (buy/sell)     (LLM narrative + sentiment) (validation)
 ```
 
 ## Module Reference
 
 | Module | Description |
 |---|---|
-| `config.py` | Central configuration: paths, LAS weights, CIK-ticker mapping (DJIA 30), CAR window, database URL |
+| `config.py` | Central configuration: paths, LAS weights, CIK-ticker mapping (S&P 500), universe mode, section weights, CAR window, database URL |
 | `document_pull.py` | Pull 10-K filings from SEC EDGAR; saves raw HTML and `company_facts.json` under `entityName_cik/` |
 | `extract_clean.py` | Parse iXBRL HTML, strip noise (scripts, styles, XBRL blocks, numeric tables), split text by Item section |
 | `embeddings.py` | Build count vectors (or TF-IDF) per document and per section using sklearn |
@@ -73,8 +76,12 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
 | `abnormal_returns.py` | Fetch daily prices from Yahoo Finance, compute market-adjusted CAR over a configurable event window |
 | `las.py` | Combine change intensity, attention proxy, and CAR into a weighted LAS with rank or z-score normalization |
 | `store.py` | Database persistence layer (PostgreSQL via Docker, SQLite fallback); upsert by `(cik, accession)` |
-| `advisor_query.py` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative |
-| `run_pipeline.py` | End-to-end CLI orchestrator that runs all stages for a given set of CIKs, with incremental processing |
+| `numeric_change.py` | Extract financial numbers (dollars, percentages) from filing text; compute numerical divergence scores |
+| `advisor_query.py` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative with sentiment classification |
+| `run_pipeline.py` | End-to-end CLI orchestrator that runs all stages for a given set of CIKs, with incremental processing and parallel workers |
+| `signals.py` | Classify holdings into 5 signal categories (sell, caution, hold, neutral, buy) using LAS components with confidence scoring |
+| `backtest.py` | Validation framework measuring whether LAS and signal classifications predict forward stock returns (30d/60d/90d/180d horizons) |
+| `backtest_comparison.py` | Comparative analysis across different signal configurations and LAS weight schemes |
 | `rag/chunker.py` | Section-aware text chunker for 10-K filings with configurable max size and overlap |
 | `rag/providers.py` | Provider abstractions for embeddings (OpenAI), LLM (OpenAI), and vector store (ChromaDB) |
 | `rag/index.py` | CLI tool to embed and index filings into the vector store with manifest-based deduplication |
@@ -94,6 +101,35 @@ Where `f()` is a cross-sectional normalization (rank percentile by default). Wei
 | `w_change` | 0.50 | Year-over-year filing change intensity (1 - cosine similarity) |
 | `w_attention` | 0.25 | Investor attention proxy (placeholder for MVP) |
 | `w_car` | 0.25 | Absolute cumulative abnormal return around filing date |
+
+## Signal Classification
+
+The `signals.py` module classifies each holding into one of five actionable signals based on LAS components:
+
+| Signal | Meaning |
+|---|---|
+| **sell** | High change intensity + negative CAR -- material deterioration investors may have missed |
+| **caution** | Elevated change with modest negative drift |
+| **hold** | Moderate change, ambiguous direction |
+| **neutral** | Minimal change or low confidence -- no action |
+| **buy** | High change intensity + positive CAR -- material improvement that's underappreciated |
+
+Confidence is a blend of absolute (global universe) and relative (portfolio-only) z-scores. The blend weight adapts to portfolio size: small portfolios lean on the stable absolute baseline. Low-confidence signals are downgraded to neutral.
+
+## Backtesting & Validation
+
+The `backtest.py` module measures whether LAS and signal classifications predict real-world forward stock returns. Forward returns are computed starting **after** the CAR event window ends (day +6) to avoid circularity, since CAR is an input to the LAS formula.
+
+```bash
+python backtest.py --output results/
+```
+
+**Metrics computed:**
+- Information Coefficient (IC) -- rank correlation between LAS and forward returns
+- Signal hit rates and average returns by signal category
+- Forward horizons: 30, 60, 90, and 180 trading days
+
+The `backtest_comparison.py` module extends this with comparative analysis across different signal configurations and LAS weight schemes.
 
 ## Database
 
@@ -133,13 +169,17 @@ python run_pipeline.py --ciks 320193 --force
 
 All tunable parameters live in `config.py`:
 
+- **UNIVERSE_MODE** -- `"demo"` (50 tickers) or `"full"` (S&P 500); controls which subset of CIK_TO_TICKER is active
 - **DATABASE_URL** -- database connection string; reads from env, falls back to SQLite
-- **PIPELINE_VERSION** -- pipeline version string (default `"1.0"`); bump to force reprocessing after logic changes
+- **PIPELINE_VERSION** -- pipeline version string (default `"1.5"`); bump to force reprocessing after logic changes
 - **LAS_WEIGHTS** -- component weights for the LAS formula
 - **LAS_NORMALIZATION** -- `"rank"` (percentile) or `"zscore"`
 - **CAR_WINDOW** -- event window in trading days, default `(-1, 5)`
 - **NUMERIC_TABLE_THRESHOLD** -- tables with more than this fraction of numeric characters are dropped (default `0.15`)
-- **CIK_TO_TICKER** -- mapping of CIK integers to ticker symbols (DJIA 30 pre-loaded)
+- **NUMERIC_CHANGE_ALPHA** -- blend weight for text vs. numerical change intensity (default `0.7` text / `0.3` numerical)
+- **SECTION_WEIGHTS** -- per-section importance weights for weighted LAS (MD&A 0.30, Risk Factors 0.25, Business 0.15, etc.)
+- **PIPELINE_WORKERS** -- number of concurrent CIK workers (default `4`); overridden by `--workers` CLI flag
+- **CIK_TO_TICKER** -- mapping of CIK integers to ticker symbols (S&P 500 pre-loaded, filtered by UNIVERSE_MODE)
 - **LLM_MODEL** -- OpenAI model for advisor narratives (default `gpt-4o-mini`)
 
 ## Advisor Narrative
@@ -249,8 +289,18 @@ project_root/
 │   │   ├── app.py                  # Flask API server
 │   │   └── chat.py                 # RAG-enhanced chat handler
 │   └── frontend/                   # React + Vite dashboard
+├── Reports/                        # Validation reports and presentation materials
+│   ├── EXECUTIVE_REPORT.md
+│   ├── TECHNICAL_REPORT.md
+│   ├── BACKTEST_VALIDATION_REPORT.md
+│   └── ...
+├── scripts/
+│   └── poster_component_ic_chart.py  # IC chart generation for poster
+├── tests/                          # pytest test suite (14 modules)
 ├── config.py
 ├── store.py
+├── signals.py                      # Signal classification
+├── backtest.py                     # Backtesting framework
 ├── run_pipeline.py
 ├── DEPLOYMENT.md                   # AWS deployment guide
 └── requirements.txt
@@ -278,10 +328,12 @@ The React frontend (`dashboard/frontend/`) uses Vite and requires Node.js 18+. K
 python run_pipeline.py [OPTIONS]
 
 Options:
-  --ciks TEXT          Comma-separated CIK numbers (default: all DJIA 30)
+  --ciks TEXT          Comma-separated CIK numbers (default: all tickers in config)
   --skip-pull          Skip SEC filing download (use filings already on disk)
   --max-filings INT    Max filings to process per CIK
   --force              Reprocess all filings even if already up to date
+  --rescore-only       Only re-compute LAS from existing DB values (no data fetching)
+  --workers INT        Number of parallel CIK workers (default: config.PIPELINE_WORKERS=4)
 ```
 
 ## Advisor Dashboard
@@ -314,14 +366,18 @@ npm run dev
 
 ### Dashboard Features
 
-- **Sidebar** -- select tickers (DJIA 30), manage client profiles with risk tolerance, and view the aggregate Portfolio LAS. The ticker list adjusts its height dynamically so the LAS score is always visible.
+- **Sidebar** -- select tickers (S&P 500 universe), manage client profiles with risk tolerance, and view the aggregate Portfolio LAS. The ticker list adjusts its height dynamically so the LAS score is always visible. Mobile-responsive with a collapsible drawer.
 - **Portfolio Overview** -- holdings table with per-ticker LAS. Unprocessed tickers show a "Process" button that triggers the pipeline directly from the UI.
+- **Signal Summary** -- visual breakdown of holdings by signal category (sell/caution/hold/neutral/buy) with counts and color coding.
 - **Charts** -- LAS trend chart, similarity chart, and LAS vs. CAR scatter plot (Recharts).
 - **Key Risk Insights** -- top 5 highest-change filing sections rendered as bullet points with change intensity bars, plus an LLM-generated (or template fallback) thematic risk summary loaded asynchronously.
-- **Filings Table** -- sortable table of all filings with accession number, dates, similarity, CAR, and LAS.
-- **Section Changes** -- expandable view of individual section-level changes per filing with full extracted text.
+- **Filings Table** -- sortable, horizontally scrollable table of all filings with accession number, dates, similarity, CAR, and LAS.
+- **Section Changes** -- expandable view of individual section-level changes per filing with AI-generated summaries, **sentiment classification** (positive / negative / neutral pill badges), sentiment rationale, and side-by-side prior vs. current text diffs.
+- **Section Explorer** -- free-form section analysis tool. Pick any ticker, filing, and section to get an on-demand AI summary with sentiment classification -- not limited to the pre-computed top-changed list.
 - **Chat Panel** -- conversational interface powered by OpenAI (or template fallback) for asking questions about the portfolio analysis. Supports client-aware context.
+- **Pipeline Log Panel** -- real-time log output when triggering pipeline runs from the UI, with status polling.
 - **Client Profiles** -- create, edit, and delete client profiles with name, risk tolerance, and investment goals. The selected profile tailors chat responses.
+- **Mobile Responsive** -- fully responsive layout with collapsible sidebar, touch-friendly controls, and horizontally scrollable tables.
 
 ### API Endpoints
 
@@ -332,6 +388,8 @@ npm run dev
 | `/api/filings/<ticker>` | GET | Filings for a single ticker |
 | `/api/portfolio?tickers=AAPL,JPM` | GET | Portfolio LAS aggregation |
 | `/api/sections?tickers=AAPL&top=5` | GET | High-impact filing sections |
+| `/api/sections/summarize` | POST | AI summary + sentiment for a pre-cached section change |
+| `/api/sections/analyze` | POST | Free-form per-section summary + sentiment for any ticker/filing/section combination |
 | `/api/risk-narrative?tickers=AAPL,JPM` | GET | LLM-generated risk narrative summary |
 | `/api/filing/<cik>/<accession>/sections` | GET | Full section text for a specific filing |
 | `/api/clients` | GET/POST | List or create client profiles |
@@ -358,13 +416,16 @@ dashboard/
         └── components/
             ├── Sidebar.jsx
             ├── PortfolioOverview.jsx
+            ├── SignalSummary.jsx
             ├── LASChart.jsx
             ├── SimilarityChart.jsx
             ├── LASvsCAR.jsx
             ├── RiskInsights.jsx
             ├── FilingsTable.jsx
             ├── SectionChanges.jsx
+            ├── SectionExplorer.jsx
             ├── ChatPanel.jsx
+            ├── PipelineLogPanel.jsx
             └── ClientModal.jsx
 ```
 
@@ -380,8 +441,10 @@ The application can be deployed to a single EC2 instance using Docker Compose an
 
 ## Scope and Future Work
 
-- **MVP scope**: 10-K filings only; 10-Q support is planned
+- **Universe**: S&P 500 tickers pre-loaded; switchable between `"demo"` (50 tickers) and `"full"` (500) via `UNIVERSE_MODE` in `config.py`
+- **Filing types**: 10-K annual reports with section weights; 10-Q quarterly support is configured but not fully end-to-end yet
 - **Attention proxy**: Currently a placeholder (constant 0.5); will be replaced when SEC FOIA download data is integrated
 - **Dense embeddings**: A `--dense` flag hook exists in `embeddings.py` for future `sentence-transformers` integration
 - **Additional similarity measures**: MinEdit and Sim Simple from the paper can be added alongside the existing cosine and Jaccard measures
-- **RAG-enhanced chat**: Modular RAG integration for grounding chat responses in actual filing text
+- **Sentiment classification**: Section-level sentiment (positive/negative/neutral) with rationale is supported via OpenAI; template fallback returns `"unknown"`
+- **Signal refinement**: Walk-forward backtests, sector-neutral portfolio construction, and ML overlay for non-linear interactions are planned (see `Reports/NEXT_STEPS_RECOMMENDATIONS.md`)

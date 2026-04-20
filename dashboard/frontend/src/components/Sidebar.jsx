@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const RISK_COLORS = {
   conservative: '#06d6a0',
@@ -7,17 +7,65 @@ const RISK_COLORS = {
 };
 
 function Sidebar({
-  tickers,
+  tickerMeta,
+  allTickerMeta,
   selected,
   onAnalyze,
+  onProcessTicker,
+  pipelineJobs,
   portfolioLas,
   clients,
   activeClient,
   onSelectClient,
   onNewClient,
   onEditClient,
+  onCloseMobile,
 }) {
+  const tickers = useMemo(() => tickerMeta.map(t => t.ticker), [tickerMeta]);
+
+  const sectorGroups = useMemo(() => {
+    const groups = {};
+    for (const item of tickerMeta) {
+      const sector = item.sector || 'Other';
+      if (!groups[sector]) groups[sector] = [];
+      groups[sector].push(item.ticker);
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [tickerMeta]);
+
   const [localSelected, setLocalSelected] = useState(selected);
+  const [collapsedSectors, setCollapsedSectors] = useState({});
+  const [search, setSearch] = useState('');
+
+  const filteredSectorGroups = useMemo(() => {
+    if (!search.trim()) return sectorGroups;
+    const q = search.trim().toLowerCase();
+    return sectorGroups
+      .map(([sector, sectorTickers]) => [
+        sector,
+        sectorTickers.filter(t => t.toLowerCase().includes(q))
+      ])
+      .filter(([, sectorTickers]) => sectorTickers.length > 0);
+  }, [sectorGroups, search]);
+
+  // Unprocessed tickers matching search (from full universe)
+  const processedSet = useMemo(() => new Set(tickers), [tickers]);
+  const unprocessedResults = useMemo(() => {
+    if (!search.trim() || !allTickerMeta || allTickerMeta.length === 0) return [];
+    const q = search.trim().toLowerCase();
+    return allTickerMeta.filter(
+      t => !t.processed && t.ticker.toLowerCase().includes(q)
+    );
+  }, [search, allTickerMeta]);
+
+  const processingTickers = useMemo(() => {
+    if (!pipelineJobs) return new Set();
+    const s = new Set();
+    for (const job of pipelineJobs) {
+      if (job.status === 'running') job.tickers.forEach(t => s.add(t));
+    }
+    return s;
+  }, [pipelineJobs]);
 
   useEffect(() => {
     if (activeClient) {
@@ -32,6 +80,20 @@ function Sidebar({
     setLocalSelected(prev =>
       prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]
     );
+  };
+
+  const toggleSector = (sector, sectorTickers) => {
+    if (activeClient) onSelectClient(null);
+    const allSelected = sectorTickers.every(t => localSelected.includes(t));
+    if (allSelected) {
+      setLocalSelected(prev => prev.filter(t => !sectorTickers.includes(t)));
+    } else {
+      setLocalSelected(prev => [...new Set([...prev, ...sectorTickers])]);
+    }
+  };
+
+  const toggleCollapse = (sector) => {
+    setCollapsedSectors(prev => ({ ...prev, [sector]: !prev[sector] }));
   };
 
   const selectAll = () => {
@@ -65,6 +127,13 @@ function Sidebar({
 
   return (
     <nav className="sidebar">
+      <button
+        className="sidebar-close-mobile"
+        onClick={onCloseMobile}
+        aria-label="Close menu"
+      >
+        {'\u2715'}
+      </button>
       <h2>LazyPrices</h2>
       <p className="brand-sub">Advisor Dashboard</p>
 
@@ -142,25 +211,80 @@ function Sidebar({
         </button>
       </div>
 
+      <input
+        className="ticker-search"
+        type="text"
+        placeholder="Search S&P 500 tickers..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+
       <div className="ticker-list">
-        {tickers.map(ticker => (
-          <div
-            key={ticker}
-            className={`ticker-item ${localSelected.includes(ticker) ? 'selected' : ''}`}
-            onClick={() => toggle(ticker)}
-          >
-            <input
-              type="checkbox"
-              checked={localSelected.includes(ticker)}
-              onChange={() => toggle(ticker)}
-              onClick={e => e.stopPropagation()}
-            />
-            {ticker}
+        {filteredSectorGroups.map(([sector, sectorTickers]) => {
+          const collapsed = search.trim() ? false : collapsedSectors[sector];
+          const selectedCount = sectorTickers.filter(t => localSelected.includes(t)).length;
+          const allSelected = selectedCount === sectorTickers.length;
+          const someSelected = selectedCount > 0 && !allSelected;
+
+          return (
+            <div key={sector} className="sector-group">
+              <div
+                className="sector-header"
+                onClick={() => toggleCollapse(sector)}
+              >
+                <span className="sector-arrow">{collapsed ? '\u25B6' : '\u25BC'}</span>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={el => { if (el) el.indeterminate = someSelected; }}
+                  onChange={() => toggleSector(sector, sectorTickers)}
+                  onClick={e => e.stopPropagation()}
+                />
+                <span className="sector-name">{sector}</span>
+                <span className="sector-count">{selectedCount}/{sectorTickers.length}</span>
+              </div>
+              {!collapsed && sectorTickers.map(ticker => (
+                <div
+                  key={ticker}
+                  className={`ticker-item ${localSelected.includes(ticker) ? 'selected' : ''}`}
+                  onClick={() => toggle(ticker)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={localSelected.includes(ticker)}
+                    onChange={() => toggle(ticker)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                  {ticker}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {unprocessedResults.length > 0 && (
+          <div className="unprocessed-section">
+            <div className="unprocessed-header">Available to Process</div>
+            {unprocessedResults.map(item => (
+              <div key={item.ticker} className="ticker-item unprocessed">
+                <span className="unprocessed-ticker">{item.ticker}</span>
+                <span className="unprocessed-sector">{item.sector}</span>
+                {processingTickers.has(item.ticker) ? (
+                  <span className="unprocessed-badge processing">Processing...</span>
+                ) : (
+                  <button
+                    className="unprocessed-process-btn"
+                    onClick={() => onProcessTicker && onProcessTicker(item.ticker)}
+                  >
+                    Process
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
-        {tickers.length === 0 && (
+        )}
+        {tickers.length === 0 && !search.trim() && (
           <p style={{ fontSize: 12, color: '#718096', padding: 8 }}>
-            No tickers in database. Run the pipeline first.
+            No tickers in database. Search and process tickers to get started.
           </p>
         )}
       </div>

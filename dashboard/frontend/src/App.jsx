@@ -1,19 +1,23 @@
-import React, { useState, useEffect, useCallback, Component } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Component } from 'react';
 import './App.css';
 import {
-  fetchTickers, fetchFilings, fetchPortfolio, fetchSections,
+  fetchTickers, fetchAllTickers, fetchFilings, fetchPortfolio, fetchSections,
   fetchClients, createClient, updateClient, deleteClient,
+  runPipeline, subscribePipelineLogs,
 } from './api';
 import Sidebar from './components/Sidebar';
 import PortfolioOverview from './components/PortfolioOverview';
 import FilingsTable from './components/FilingsTable';
 import SectionChanges from './components/SectionChanges';
+import SectionExplorer from './components/SectionExplorer';
 import LASChart from './components/LASChart';
 import SimilarityChart from './components/SimilarityChart';
 import LASvsCAR from './components/LASvsCAR';
 import ChatPanel from './components/ChatPanel';
 import RiskInsights from './components/RiskInsights';
 import ClientModal from './components/ClientModal';
+import SignalSummary from './components/SignalSummary';
+import PipelineLogPanel from './components/PipelineLogPanel';
 
 class ErrorBoundary extends Component {
   state = { error: null };
@@ -39,8 +43,19 @@ const RISK_COLORS = {
 };
 
 function App() {
-  const [availableTickers, setAvailableTickers] = useState([]);
+  const [tickerMeta, setTickerMeta] = useState([]);
+  const [allTickerMeta, setAllTickerMeta] = useState([]);
   const [selectedTickers, setSelectedTickers] = useState([]);
+  const [pipelineJobs, setPipelineJobs] = useState([]);
+  const [logPanelMinimized, setLogPanelMinimized] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
+  const availableTickers = useMemo(
+    () => tickerMeta.map(t => t.ticker),
+    [tickerMeta],
+  );
   const [portfolio, setPortfolio] = useState(null);
   const [filings, setFilings] = useState([]);
   const [sections, setSections] = useState([]);
@@ -53,8 +68,11 @@ function App() {
 
   useEffect(() => {
     fetchTickers()
-      .then(setAvailableTickers)
-      .catch(() => setAvailableTickers([]));
+      .then(setTickerMeta)
+      .catch(() => setTickerMeta([]));
+    fetchAllTickers()
+      .then(setAllTickerMeta)
+      .catch(() => setAllTickerMeta([]));
     fetchClients()
       .then(setClients)
       .catch(() => setClients([]));
@@ -64,12 +82,12 @@ function App() {
     fetchClients().then(setClients).catch(() => {});
   }, []);
 
-  const loadAnalysis = useCallback((tickers) => {
+  const loadAnalysis = useCallback((tickers, riskTolerance) => {
     if (!tickers.length) return;
     setLoading(true);
 
     Promise.all([
-      fetchPortfolio(tickers),
+      fetchPortfolio(tickers, riskTolerance),
       fetchFilings(tickers),
       fetchSections(tickers, 10),
     ])
@@ -90,17 +108,79 @@ function App() {
   const handleAnalyze = useCallback((tickers) => {
     if (!tickers.length) return;
     setSelectedTickers(tickers);
-    loadAnalysis(tickers);
-  }, [loadAnalysis]);
+    loadAnalysis(tickers, activeClient?.risk_tolerance);
+    setSidebarOpen(false);
+  }, [loadAnalysis, activeClient]);
 
   const handleRefreshAfterPipeline = useCallback(() => {
-    fetchTickers()
-      .then(setAvailableTickers)
-      .catch(() => {});
+    fetchTickers().then(setTickerMeta).catch(() => {});
+    fetchAllTickers().then(setAllTickerMeta).catch(() => {});
     if (selectedTickers.length) {
-      loadAnalysis(selectedTickers);
+      loadAnalysis(selectedTickers, activeClient?.risk_tolerance);
     }
-  }, [selectedTickers, loadAnalysis]);
+  }, [selectedTickers, loadAnalysis, activeClient]);
+
+  const eventSourcesRef = useRef({});
+
+  const handleProcessTicker = useCallback((ticker) => {
+    const tickerList = Array.isArray(ticker) ? ticker : [ticker];
+    runPipeline(tickerList)
+      .then(data => {
+        const validTickers = data.tickers || tickerList;
+        const jobEntry = {
+          jobId: data.job_id,
+          tickers: validTickers,
+          skipped: data.skipped || [],
+          status: 'running',
+          logs: [],
+          currentStage: '',
+        };
+        setPipelineJobs(prev => [...prev, jobEntry]);
+        setLogPanelMinimized(false);
+
+        const es = subscribePipelineLogs(
+          data.job_id,
+          // onLog
+          (logData) => {
+            setPipelineJobs(prev => prev.map(j =>
+              j.jobId === data.job_id
+                ? { ...j, logs: [...j.logs, logData], currentStage: logData.stage || j.currentStage }
+                : j
+            ));
+          },
+          // onDone
+          (doneData) => {
+            setPipelineJobs(prev => prev.map(j =>
+              j.jobId === data.job_id
+                ? { ...j, status: doneData.status }
+                : j
+            ));
+            delete eventSourcesRef.current[data.job_id];
+            handleRefreshAfterPipeline();
+          },
+          // onError
+          () => {
+            setPipelineJobs(prev => prev.map(j =>
+              j.jobId === data.job_id
+                ? { ...j, status: 'failed' }
+                : j
+            ));
+            delete eventSourcesRef.current[data.job_id];
+          },
+        );
+        eventSourcesRef.current[data.job_id] = es;
+      })
+      .catch(err => {
+        console.error('Pipeline start failed:', err);
+      });
+  }, [handleRefreshAfterPipeline]);
+
+  const handleCloseLogPanel = useCallback(() => {
+    // Close all active SSE connections
+    Object.values(eventSourcesRef.current).forEach(es => es.close());
+    eventSourcesRef.current = {};
+    setPipelineJobs([]);
+  }, []);
 
   const handleSelectClient = useCallback((client) => {
     setActiveClient(client);
@@ -144,17 +224,33 @@ function App() {
 
   return (
     <ErrorBoundary>
-    <div className="app">
+    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
+      <button
+        className="sidebar-toggle"
+        aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+        onClick={() => setSidebarOpen(prev => !prev)}
+      >
+        {sidebarOpen ? '\u2715' : '\u2630'}
+      </button>
+      <div
+        className="sidebar-backdrop"
+        onClick={closeSidebar}
+        aria-hidden="true"
+      />
       <Sidebar
-        tickers={availableTickers}
+        tickerMeta={tickerMeta}
+        allTickerMeta={allTickerMeta}
         selected={selectedTickers}
         onAnalyze={handleAnalyze}
+        onProcessTicker={handleProcessTicker}
+        pipelineJobs={pipelineJobs}
         portfolioLas={portfolio?.portfolio_las}
         clients={clients}
         activeClient={activeClient}
         onSelectClient={handleSelectClient}
         onNewClient={handleNewClient}
         onEditClient={handleEditClient}
+        onCloseMobile={closeSidebar}
       />
 
       <main className="main-content">
@@ -181,20 +277,29 @@ function App() {
 
         {portfolio && !loading && (
           <>
-            <PortfolioOverview portfolio={portfolio} filings={filings} onRefresh={handleRefreshAfterPipeline} />
+            <SignalSummary portfolio={portfolio} />
+            <PortfolioOverview
+              portfolio={portfolio}
+              filings={filings}
+              onRefresh={handleRefreshAfterPipeline}
+              onProcessWithLogs={handleProcessTicker}
+              pipelineJobs={pipelineJobs}
+            />
 
             <div className="charts-row">
               <LASChart filings={filings} />
               <SimilarityChart filings={filings} />
             </div>
 
-            <LASvsCAR filings={filings} />
+            <LASvsCAR filings={filings} portfolio={portfolio} />
 
             <RiskInsights sections={sections} tickers={selectedTickers} />
 
             <FilingsTable filings={filings} />
 
             <SectionChanges sections={sections} />
+
+            <SectionExplorer tickers={selectedTickers} />
           </>
         )}
 
@@ -208,6 +313,13 @@ function App() {
       </main>
 
       <ChatPanel tickers={selectedTickers} activeClient={activeClient} />
+
+      <PipelineLogPanel
+        jobs={pipelineJobs}
+        onClose={handleCloseLogPanel}
+        minimized={logPanelMinimized}
+        onToggleMinimize={() => setLogPanelMinimized(prev => !prev)}
+      />
 
       <ClientModal
         isOpen={modalOpen}

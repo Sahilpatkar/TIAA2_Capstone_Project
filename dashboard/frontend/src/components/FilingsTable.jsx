@@ -6,8 +6,12 @@ const COLUMNS = [
   { key: 'similarity_cosine', label: 'Cosine Sim', numeric: true },
   { key: 'similarity_jaccard',label: 'Jaccard Sim', numeric: true },
   { key: 'change_intensity',  label: 'Change Int.', numeric: true },
+  { key: 'attention_proxy',   label: 'Attn Vol.', numeric: true },
   { key: 'car',               label: 'CAR', numeric: true },
   { key: 'las',               label: 'LAS', numeric: true },
+  { key: 'norm_change',       label: 'N-Change', numeric: true },
+  { key: 'norm_attention',    label: 'N-Attn', numeric: true },
+  { key: 'norm_car',          label: 'N-CAR', numeric: true },
 ];
 
 function fmt(val) {
@@ -152,10 +156,14 @@ function FilingsTable({ filings }) {
                     <td>{fmt(f.similarity_cosine)}</td>
                     <td>{fmt(f.similarity_jaccard)}</td>
                     <td>{fmt(f.change_intensity)}</td>
+                    <td>{fmt(f.attention_proxy)}</td>
                     <td style={{ color: f.car != null && f.car >= 0 ? '#06a77d' : f.car != null ? '#d63d5e' : 'inherit' }}>
                       {fmt(f.car)}
                     </td>
                     <td><strong>{fmt(f.las)}</strong></td>
+                    <td style={{ color: '#4361ee' }}>{fmt(f.norm_change)}</td>
+                    <td style={{ color: '#ef476f' }}>{fmt(f.norm_attention)}</td>
+                    <td style={{ color: '#06a77d' }}>{fmt(f.norm_car)}</td>
                   </tr>
                 ))}
               </tbody>

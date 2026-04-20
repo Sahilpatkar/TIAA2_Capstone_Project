@@ -9,6 +9,9 @@ Usage:
 """
 
 import argparse
+import contextlib
+import io
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -16,6 +19,18 @@ import pandas as pd
 import yfinance as yf
 
 import config
+
+
+def _yf_download_with_retry(ticker: str, start: str, end: str, max_retries: int = 3) -> pd.DataFrame:
+    """yf.download wrapper with retries + backoff to survive transient rate limits."""
+    for attempt in range(max_retries):
+        with contextlib.redirect_stderr(io.StringIO()):
+            data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+        if not data.empty:
+            return data
+        if attempt < max_retries - 1:
+            time.sleep(1.5 * (attempt + 1))
+    return data
 
 
 def _trading_days_around(filed_date: str, buffer_calendar_days: int = None) -> tuple[str, str]:
@@ -29,7 +44,7 @@ def _trading_days_around(filed_date: str, buffer_calendar_days: int = None) -> t
 
 def _daily_returns(ticker: str, start: str, end: str) -> pd.Series:
     """Fetch adjusted close prices from Yahoo Finance and compute daily returns."""
-    data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    data = _yf_download_with_retry(ticker, start, end)
     if data.empty:
         return pd.Series(dtype=float)
     close = data["Close"].squeeze()
@@ -112,14 +127,77 @@ def compute_car(
     }
 
 
+def compute_volume_ratio(
+    ticker: str,
+    filed_date: str,
+    window: tuple[int, int] | None = None,
+    baseline_days: int | None = None,
+    baseline_gap: int | None = None,
+) -> float | None:
+    """
+    Abnormal trading-volume ratio around *filed_date*.
+
+    Returns event-window mean volume divided by trailing baseline mean volume.
+    A value > 1 signals above-normal investor attention; < 1 signals inattention.
+    Returns None when data is insufficient.
+    """
+    window = window or config.CAR_WINDOW
+    baseline_days = baseline_days or config.VOLUME_BASELINE_DAYS
+    baseline_gap = baseline_gap or config.VOLUME_BASELINE_GAP
+
+    buf = max(config.CAR_BUFFER_DAYS, baseline_days + baseline_gap + 30)
+    dt = datetime.strptime(filed_date, "%Y-%m-%d")
+    start_str = (dt - timedelta(days=buf)).strftime("%Y-%m-%d")
+    end_str = (dt + timedelta(days=config.CAR_BUFFER_DAYS)).strftime("%Y-%m-%d")
+
+    data = _yf_download_with_retry(ticker, start_str, end_str)
+    if data.empty or "Volume" not in data.columns:
+        return None
+
+    volume = data["Volume"].squeeze()
+    if isinstance(volume, pd.DataFrame):
+        volume = volume.iloc[:, 0]
+
+    idx = volume.index
+    idx = idx.tz_localize(None) if idx.tz else idx
+    volume.index = idx
+
+    filed_dt = pd.Timestamp(filed_date)
+
+    idx_after = idx[idx >= filed_dt]
+    if idx_after.empty:
+        return None
+    event_idx = idx.get_loc(idx_after[0])
+
+    win_start = max(event_idx + window[0], 0)
+    win_end = min(event_idx + window[1] + 1, len(idx))
+    event_vol = volume.iloc[win_start:win_end]
+    if event_vol.empty:
+        return None
+
+    baseline_end = max(event_idx + window[0] - baseline_gap, 0)
+    baseline_start = max(baseline_end - baseline_days, 0)
+    baseline_vol = volume.iloc[baseline_start:baseline_end]
+    if baseline_vol.empty:
+        return None
+
+    baseline_mean = float(baseline_vol.mean())
+    if baseline_mean == 0 or np.isnan(baseline_mean):
+        return None
+
+    ratio = float(event_vol.mean()) / baseline_mean
+    return round(ratio, 6)
+
+
 def resolve_ticker(cik: int) -> str | None:
-    """Look up ticker for a CIK using the config mapping."""
-    return config.CIK_TO_TICKER.get(cik)
+    """Look up ticker for a CIK using the full (unfiltered) config mapping."""
+    full = getattr(config, "_CIK_TO_TICKER_FULL", config.CIK_TO_TICKER)
+    return full.get(cik)
 
 
-# ---------------------------------------------------------------------------
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Compute CAR for a filing")

@@ -12,6 +12,7 @@ Usage:
 """
 
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -27,9 +28,9 @@ if _USE_PG:
     import psycopg2.extras
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Schema DDL (PostgreSQL flavour)
-# ---------------------------------------------------------------------------
+
 
 _PG_CREATE_FILINGS = """
 CREATE TABLE IF NOT EXISTS filings (
@@ -41,10 +42,14 @@ CREATE TABLE IF NOT EXISTS filings (
     ticker           TEXT,
     similarity_cosine  DOUBLE PRECISION,
     similarity_jaccard DOUBLE PRECISION,
+    numerical_divergence DOUBLE PRECISION,
     change_intensity   DOUBLE PRECISION,
     attention_proxy    DOUBLE PRECISION,
     car                DOUBLE PRECISION,
     las                DOUBLE PRECISION,
+    norm_change        DOUBLE PRECISION,
+    norm_attention     DOUBLE PRECISION,
+    norm_car           DOUBLE PRECISION,
     section_changes_json TEXT,
     cleaned_text_path    TEXT,
     PRIMARY KEY (cik, accession)
@@ -86,9 +91,9 @@ CREATE TABLE IF NOT EXISTS client_portfolios (
 );
 """
 
-# ---------------------------------------------------------------------------
+
 # Schema DDL (SQLite flavour)
-# ---------------------------------------------------------------------------
+
 
 _SQLITE_CREATE_FILINGS = """
 CREATE TABLE IF NOT EXISTS filings (
@@ -100,10 +105,14 @@ CREATE TABLE IF NOT EXISTS filings (
     ticker           TEXT,
     similarity_cosine  REAL,
     similarity_jaccard REAL,
+    numerical_divergence REAL,
     change_intensity   REAL,
     attention_proxy    REAL,
     car                REAL,
     las                REAL,
+    norm_change        REAL,
+    norm_attention     REAL,
+    norm_car           REAL,
     section_changes_json TEXT,
     cleaned_text_path    TEXT,
     PRIMARY KEY (cik, accession)
@@ -145,9 +154,8 @@ CREATE TABLE IF NOT EXISTS client_portfolios (
 );
 """
 
-# ---------------------------------------------------------------------------
+
 # Preset client profiles
-# ---------------------------------------------------------------------------
 
 _PRESET_PROFILES = [
     {
@@ -172,7 +180,7 @@ _PRESET_PROFILES = [
         "tickers": ["AAPL", "MSFT", "AMGN", "CRM", "NKE", "GS", "DIS"],
     },
     {
-        "name": "Patricia Williams",
+        "name": "Sahil Patkar",
         "risk_tolerance": "conservative",
         "investment_goal": "income",
         "notes": "Focus on high-dividend-yield names for steady income generation.",
@@ -198,11 +206,13 @@ class LASStore:
         else:
             db_path = url.replace("sqlite:///", "") if url.startswith("sqlite:///") else config.DB_PATH
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
-            self._conn = sqlite3.connect(db_path)
+            self._conn = sqlite3.connect(db_path, timeout=30)
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.row_factory = sqlite3.Row
             self._init_sqlite_schema()
 
+        self._migrate_norm_columns()
         self._deduplicate_filings()
         self._seed_presets()
 
@@ -262,6 +272,18 @@ class LASStore:
         self._conn.execute(_SQLITE_CREATE_CLIENTS)
         self._conn.execute(_SQLITE_CREATE_CLIENT_PORTFOLIOS)
         self._conn.commit()
+
+    # -- add norm columns migration (idempotent) --
+
+    def _migrate_norm_columns(self) -> None:
+        col_type = "DOUBLE PRECISION" if self._pg else "REAL"
+        for col in ("norm_change", "norm_attention", "norm_car", "numerical_divergence"):
+            try:
+                self._execute(f"ALTER TABLE filings ADD COLUMN {col} {col_type}")
+                self._commit()
+            except Exception:
+                if self._pg:
+                    self._conn.rollback()
 
     # -- dedup migration (idempotent) --
 
@@ -325,12 +347,22 @@ class LASStore:
 
     # -- write --
 
+    @staticmethod
+    def _clean(v):
+        """Convert NaN/inf floats to None so they become SQL NULL."""
+        if v is None:
+            return None
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
     def upsert(self, row: dict) -> None:
         """Insert or update a filing record."""
         section_json = row.get("section_changes_json")
         if isinstance(section_json, (list, dict)):
             section_json = json.dumps(section_json)
 
+        _c = self._clean
         params = (
             row.get("cik"),
             row.get("entity_name"),
@@ -338,12 +370,16 @@ class LASStore:
             row.get("filed_date"),
             row.get("report_date"),
             row.get("ticker"),
-            row.get("similarity_cosine"),
-            row.get("similarity_jaccard"),
-            row.get("change_intensity"),
-            row.get("attention_proxy"),
-            row.get("car"),
-            row.get("las"),
+            _c(row.get("similarity_cosine")),
+            _c(row.get("similarity_jaccard")),
+            _c(row.get("numerical_divergence")),
+            _c(row.get("change_intensity")),
+            _c(row.get("attention_proxy")),
+            _c(row.get("car")),
+            _c(row.get("las")),
+            _c(row.get("norm_change")),
+            _c(row.get("norm_attention")),
+            _c(row.get("norm_car")),
             section_json,
             row.get("cleaned_text_path"),
         )
@@ -353,9 +389,11 @@ class LASStore:
                 """
                 INSERT INTO filings
                     (cik, entity_name, accession, filed_date, report_date, ticker,
-                     similarity_cosine, similarity_jaccard, change_intensity,
-                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     similarity_cosine, similarity_jaccard, numerical_divergence,
+                     change_intensity, attention_proxy, car, las,
+                     norm_change, norm_attention, norm_car,
+                     section_changes_json, cleaned_text_path)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (cik, accession) DO UPDATE SET
                     entity_name = EXCLUDED.entity_name,
                     filed_date = EXCLUDED.filed_date,
@@ -363,10 +401,14 @@ class LASStore:
                     ticker = EXCLUDED.ticker,
                     similarity_cosine = EXCLUDED.similarity_cosine,
                     similarity_jaccard = EXCLUDED.similarity_jaccard,
+                    numerical_divergence = EXCLUDED.numerical_divergence,
                     change_intensity = EXCLUDED.change_intensity,
                     attention_proxy = EXCLUDED.attention_proxy,
                     car = EXCLUDED.car,
                     las = EXCLUDED.las,
+                    norm_change = EXCLUDED.norm_change,
+                    norm_attention = EXCLUDED.norm_attention,
+                    norm_car = EXCLUDED.norm_car,
                     section_changes_json = EXCLUDED.section_changes_json,
                     cleaned_text_path = EXCLUDED.cleaned_text_path
                 """,
@@ -377,9 +419,11 @@ class LASStore:
                 """
                 INSERT OR REPLACE INTO filings
                     (cik, entity_name, accession, filed_date, report_date, ticker,
-                     similarity_cosine, similarity_jaccard, change_intensity,
-                     attention_proxy, car, las, section_changes_json, cleaned_text_path)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     similarity_cosine, similarity_jaccard, numerical_divergence,
+                     change_intensity, attention_proxy, car, las,
+                     norm_change, norm_attention, norm_car,
+                     section_changes_json, cleaned_text_path)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 params,
             )
@@ -418,7 +462,8 @@ class LASStore:
     def get_latest_by_ticker(self, ticker: str) -> dict | None:
         p = self._p()
         return self._fetchone(
-            f"SELECT * FROM filings WHERE ticker = {p} ORDER BY report_date DESC LIMIT 1",
+            f"SELECT * FROM filings WHERE ticker = {p} AND report_date IS NOT NULL "
+            f"ORDER BY report_date DESC LIMIT 1",
             (ticker.upper(),),
         )
 

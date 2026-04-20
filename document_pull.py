@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 import json
 import requests
@@ -16,43 +17,74 @@ HEADERS = {
     "Host": "data.sec.gov",
 }
 
+_SEC_SEMAPHORE = threading.Semaphore(8)
+
+
 def sec_get(url, host="data.sec.gov", max_retries=5):
-    headers = dict(HEADERS)
-    headers["Host"] = host
-    for i in range(max_retries):
-        r = requests.get(url, headers=headers, timeout=30)
-        if r.status_code == 200:
-            return r
-        # simple backoff for 429/5xx
-        if r.status_code in (429, 500, 502, 503, 504):
-            time.sleep(1.5 * (i + 1))
-            continue
-        r.raise_for_status()
-    raise RuntimeError(f"Failed after retries: {url} ({r.status_code})")
+    with _SEC_SEMAPHORE:
+        headers = dict(HEADERS)
+        headers["Host"] = host
+        for i in range(max_retries):
+            r = requests.get(url, headers=headers, timeout=30)
+            if r.status_code == 200:
+                return r
+            if r.status_code in (429, 500, 502, 503, 504):
+                time.sleep(1.5 * (i + 1))
+                continue
+            r.raise_for_status()
+        raise RuntimeError(f"Failed after retries: {url} ({r.status_code})")
 
 def cik10(cik: int) -> str:
     return str(cik).zfill(10)
 
-def get_10k_filings_for_cik(cik: int):
-    url = f"{SEC_DATA}submissions/CIK{cik10(cik)}.json"
-    data = sec_get(url, host="data.sec.gov").json()
-    recent = data.get("filings", {}).get("recent", {})
-    forms = recent.get("form", [])
+def _extract_filings(block: dict, cik: int, form_types: list[str] | None = None) -> list[dict]:
+    """Extract entries matching *form_types* from a submissions block."""
+    form_types = form_types or getattr(config, "FILING_TYPES", ["10-K"])
+    form_set = set(form_types)
+    forms = block.get("form", [])
     out = []
     for idx, form in enumerate(forms):
-        if form == "10-K":
-            accession = recent["accessionNumber"][idx]
-            filed = recent["filingDate"][idx]
-            primary_doc = recent["primaryDocument"][idx]
-            report_date = recent.get("reportDate", [None]*len(forms))[idx]
+        if form in form_set:
             out.append({
                 "cik": cik,
-                "accession": accession,
-                "filed_date": filed,
-                "report_date": report_date,
-                "primary_document": primary_doc,
+                "form_type": form,
+                "accession": block["accessionNumber"][idx],
+                "filed_date": block["filingDate"][idx],
+                "report_date": block.get("reportDate", [None] * len(forms))[idx],
+                "primary_document": block["primaryDocument"][idx],
             })
     return out
+
+
+def _extract_10ks(block: dict, cik: int) -> list[dict]:
+    """Extract 10-K entries (backward-compatible wrapper)."""
+    return _extract_filings(block, cik, ["10-K"])
+
+
+def get_filings_for_cik(cik: int, form_types: list[str] | None = None) -> list[dict]:
+    """Fetch filings of given types for a CIK from SEC EDGAR."""
+    form_types = form_types or getattr(config, "FILING_TYPES", ["10-K"])
+    url = f"{SEC_DATA}submissions/CIK{cik10(cik)}.json"
+    data = sec_get(url, host="data.sec.gov").json()
+
+    recent = data.get("filings", {}).get("recent", {})
+    out = _extract_filings(recent, cik, form_types)
+
+    for file_ref in data.get("filings", {}).get("files", []):
+        try:
+            overflow_url = f"{SEC_DATA}submissions/{file_ref['name']}"
+            overflow = sec_get(overflow_url, host="data.sec.gov").json()
+            out.extend(_extract_filings(overflow, cik, form_types))
+        except Exception:
+            pass
+
+    out.sort(key=lambda f: f["filed_date"], reverse=True)
+    return out
+
+
+def get_10k_filings_for_cik(cik: int):
+    """Backward-compatible: fetch only 10-K filings."""
+    return get_filings_for_cik(cik, ["10-K"])
 
 def filing_primary_doc_url(cik: int, accession: str, primary_doc: str) -> str:
     # accession like 0000320193-25-000010 -> remove dashes for folder

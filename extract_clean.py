@@ -23,9 +23,8 @@ import config
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
-# ---------------------------------------------------------------------------
 # HTML cleaning helpers
-# ---------------------------------------------------------------------------
+
 
 def _remove_hidden_xbrl(soup: BeautifulSoup) -> None:
     """Remove the hidden iXBRL header block (display:none div at top)."""
@@ -69,9 +68,9 @@ def _normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
-# ---------------------------------------------------------------------------
+
 # Full-document cleaning
-# ---------------------------------------------------------------------------
+
 
 def clean_html(html: str) -> str:
     """Return cleaned plain text from a 10-K HTML filing."""
@@ -83,9 +82,9 @@ def clean_html(html: str) -> str:
     return _normalize_whitespace(text)
 
 
-# ---------------------------------------------------------------------------
+
 # Section extraction
-# ---------------------------------------------------------------------------
+
 
 # Regex that matches "Item 1", "Item 1A", "ITEM 7A", etc. as a section heading.
 # Requires the item label to appear near the start of a line (after optional whitespace)
@@ -144,9 +143,9 @@ def extract_sections(full_text: str) -> dict[str, str]:
     return sections
 
 
-# ---------------------------------------------------------------------------
+
 # Per-filing processing
-# ---------------------------------------------------------------------------
+
 
 def process_filing(html_path: str, output_dir: str) -> str:
     """
@@ -200,9 +199,9 @@ def process_entity_dir(entity_dir: str, specific_file: str | None = None) -> lis
     return results
 
 
-# ---------------------------------------------------------------------------
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and clean 10-K text")

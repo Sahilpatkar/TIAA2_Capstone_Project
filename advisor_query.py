@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 
 from dotenv import load_dotenv
@@ -21,20 +22,36 @@ load_dotenv()
 import pandas as pd
 
 import config
+from signals import compute_portfolio_signals
 from store import LASStore
 
 
-# ---------------------------------------------------------------------------
-# 1. Portfolio LAS aggregation
-# ---------------------------------------------------------------------------
 
+def _fetch_universe(db: LASStore) -> list[dict]:
+    """Fetch the latest filing for every ticker in the DB (absolute baseline)."""
+    all_tickers = sorted(config.CIK_TO_TICKER.values())
+    universe = []
+    for ticker in all_tickers:
+        latest = db.get_latest_by_ticker(ticker)
+        if latest and latest.get("change_intensity") is not None:
+            universe.append({
+                "ticker": ticker,
+                "change_intensity": latest.get("change_intensity"),
+                "attention_proxy": latest.get("attention_proxy"),
+                "car": latest.get("car"),
+            })
+    return universe
+
+
+# 1. Portfolio LAS aggregation
 def aggregate_las(
     tickers: list[str],
     weights: dict[str, float] | None = None,
     db: LASStore | None = None,
+    risk_tolerance: str = "moderate",
 ) -> dict:
     """
-    Compute a portfolio-level LAS summary.
+    Compute a portfolio-level LAS summary with buy/sell signal annotations.
 
     Parameters
     ----------
@@ -44,10 +61,13 @@ def aggregate_las(
         {ticker: weight}.  Defaults to equal weight.
     db : LASStore, optional
         Open database handle.  Opened/closed automatically if None.
+    risk_tolerance : str
+        Client risk profile used to adjust signal thresholds.
 
     Returns
     -------
-    dict with keys: portfolio_las, holdings (list of per-ticker dicts).
+    dict with keys: portfolio_las, holdings (list of per-ticker dicts),
+    signal_summary.
     """
     own_db = db is None
     if own_db:
@@ -66,12 +86,23 @@ def aggregate_las(
                 "report_date": latest.get("report_date"),
                 "las": latest.get("las"),
                 "change_intensity": latest.get("change_intensity"),
+                "attention_proxy": latest.get("attention_proxy"),
                 "car": latest.get("car"),
+                "norm_change": latest.get("norm_change"),
+                "norm_attention": latest.get("norm_attention"),
+                "norm_car": latest.get("norm_car"),
+                "section_changes_json": latest.get("section_changes_json"),
             })
 
-        scored = [h for h in holdings if h.get("las") is not None]
+        def _valid_las(val):
+            return val is not None and not (isinstance(val, float) and math.isnan(val))
+
+        scored = [h for h in holdings if _valid_las(h.get("las"))]
         if not scored:
-            return {"portfolio_las": None, "holdings": holdings}
+            portfolio = {"portfolio_las": None, "holdings": holdings}
+            universe = _fetch_universe(db)
+            compute_portfolio_signals(portfolio, risk_tolerance, universe=universe)
+            return portfolio
 
         if weights:
             total_w = sum(weights.get(h["ticker"], 1.0) for h in scored)
@@ -83,16 +114,25 @@ def aggregate_las(
 
         holdings.sort(key=lambda h: h.get("las") or float("-inf"), reverse=True)
 
-        return {"portfolio_las": round(port_las, 6), "holdings": holdings}
+        portfolio = {
+            "portfolio_las": round(port_las, 6),
+            "holdings": holdings,
+            "las_weights": config.LAS_WEIGHTS,
+        }
+
+        universe = _fetch_universe(db)
+        compute_portfolio_signals(portfolio, risk_tolerance, universe=universe)
+
+        for h in holdings:
+            h.pop("section_changes_json", None)
+
+        return portfolio
     finally:
         if own_db:
             db.close()
 
 
-# ---------------------------------------------------------------------------
 # 2. High-impact section retrieval
-# ---------------------------------------------------------------------------
-
 def retrieve_high_impact_sections(
     tickers: list[str],
     top_n: int = 5,
@@ -126,15 +166,20 @@ def retrieve_high_impact_sections(
                 section_texts = data.get("sections", {})
 
             for sc in changes:
-                text = section_texts.get(sc["section"], "")
-                snippet = text[:500] + "..." if len(text) > 500 else text
+                snippet_new = sc.get("snippet_new") or ""
+                snippet_old = sc.get("snippet_old") or ""
+                if not snippet_new:
+                    text = section_texts.get(sc["section"], "")
+                    snippet_new = text[:500] + "..." if len(text) > 500 else text
                 sections.append({
                     "ticker": ticker,
                     "entity_name": latest.get("entity_name"),
                     "report_date": latest.get("report_date"),
                     "section": sc["section"],
                     "change_intensity": sc.get("change_intensity"),
-                    "snippet": snippet,
+                    "snippet": snippet_new,
+                    "snippet_new": snippet_new,
+                    "snippet_old": snippet_old,
                 })
 
         sections.sort(key=lambda s: s.get("change_intensity") or 0, reverse=True)
@@ -144,9 +189,9 @@ def retrieve_high_impact_sections(
             db.close()
 
 
-# ---------------------------------------------------------------------------
+
 # 3. Structured explanation (LLM or template fallback)
-# ---------------------------------------------------------------------------
+
 
 def _template_narrative(portfolio: dict, high_impact: list[dict]) -> str:
     """Plain-text summary when no LLM API key is available."""
@@ -200,8 +245,13 @@ def _llm_narrative(portfolio: dict, high_impact: list[dict]) -> str:
                 "Lazy Attention Score (LAS) analysis — which measures how much "
                 "SEC 10-K filings changed year-over-year and whether investors "
                 "paid attention — produce a concise, professional narrative for "
-                "an advisor. Highlight which holdings had the most material "
-                "disclosure changes and summarize the key themes."
+                "an advisor. Each holding has a signal (sell, caution, hold, "
+                "neutral, buy) with confidence and reasons. Explain which "
+                "holdings need attention, why they received their signal, "
+                "and summarize key themes. Always note that signals are "
+                "based on filing analysis and are not investment advice. "
+                "Keep the response under 500 words and always finish every "
+                "sentence — never leave text incomplete."
             ),
         },
         {
@@ -214,7 +264,7 @@ def _llm_narrative(portfolio: dict, high_impact: list[dict]) -> str:
         model=config.LLM_MODEL,
         messages=messages,
         temperature=0.3,
-        max_tokens=800,
+        max_tokens=1500,
     )
 
     return response.choices[0].message.content.strip()
@@ -225,9 +275,135 @@ def generate_explanation(portfolio: dict, high_impact: list[dict]) -> str:
     return _llm_narrative(portfolio, high_impact)
 
 
-# ---------------------------------------------------------------------------
+# 4. Per-section change summary (LLM or template)
+
+def summarize_section_change(
+    ticker: str,
+    section: str,
+    snippet_old: str,
+    snippet_new: str,
+) -> dict:
+    """Summarize a section diff and classify its sentiment.
+
+    Returns ``{"summary", "sentiment", "sentiment_rationale", "is_template"}``.
+    ``sentiment`` is one of ``"positive"``, ``"negative"``, ``"neutral"``, or
+    ``"unknown"`` (template fallback / no API key).
+    """
+    if not snippet_old and not snippet_new:
+        return {
+            "summary": "No text available for comparison.",
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
+            "is_template": True,
+        }
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
+            "is_template": True,
+        }
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
+            "is_template": True,
+        }
+
+    client = OpenAI(api_key=api_key)
+    pretty = section.replace("_", " ").title()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a financial analyst assistant. Given old and new text "
+                "from a specific section of an SEC filing (10-K or 10-Q), analyze "
+                "what materially changed between the two periods and return a "
+                "JSON object with exactly these three fields:\n"
+                '  "summary": a 2-4 sentence plain-English summary of what '
+                "substantively changed — new risks, removed disclosures, changed "
+                "figures, product launches. Ignore formatting differences.\n"
+                '  "sentiment": one of "positive", "negative", or "neutral". '
+                "Judge the DIRECTIONAL implication for the company's prospects — "
+                "improving margins, new products, resolved litigation are positive; "
+                "new material risks, lost customers, weakening guidance are "
+                "negative. Return \"neutral\" for purely structural, boilerplate, "
+                'or mixed changes. Do NOT treat the mere existence of "risk '
+                'factors" wording as inherently negative.\n'
+                '  "sentiment_rationale": one short sentence (under 25 words) '
+                "explaining why you chose that label, citing the specific change.\n"
+                "Return only the JSON object, nothing else."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Ticker: {ticker}\nSection: {pretty}\n\n"
+                f"--- PRIOR PERIOD ---\n{snippet_old}\n\n"
+                f"--- CURRENT PERIOD ---\n{snippet_new}"
+            ),
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=400,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
+        sentiment = str(parsed.get("sentiment", "neutral")).strip().lower()
+        if sentiment not in {"positive", "negative", "neutral"}:
+            sentiment = "neutral"
+        return {
+            "summary": str(parsed.get("summary", "")).strip() or _template_section_summary(
+                ticker, section, snippet_old, snippet_new
+            ),
+            "sentiment": sentiment,
+            "sentiment_rationale": str(parsed.get("sentiment_rationale", "")).strip(),
+            "is_template": False,
+        }
+    except json.JSONDecodeError:
+        return {
+            "summary": raw,
+            "sentiment": "neutral",
+            "sentiment_rationale": "",
+            "is_template": False,
+        }
+    except Exception:
+        return {
+            "summary": _template_section_summary(ticker, section, snippet_old, snippet_new),
+            "sentiment": "unknown",
+            "sentiment_rationale": "",
+            "is_template": True,
+        }
+
+
+def _template_section_summary(
+    ticker: str, section: str, snippet_old: str, snippet_new: str,
+) -> str:
+    pretty = section.replace("_", " ").title()
+    if not snippet_old:
+        return f"Prior-year text for {ticker} {pretty} is not available (re-run pipeline to capture it)."
+    if not snippet_new:
+        return f"Current-year text for {ticker} {pretty} is not available."
+    return (
+        f"The {pretty} section of {ticker}'s 10-K changed between filing periods. "
+        f"Set OPENAI_API_KEY for an AI-generated summary of the differences."
+    )
+
+
 # CLI
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Advisor portfolio LAS query")

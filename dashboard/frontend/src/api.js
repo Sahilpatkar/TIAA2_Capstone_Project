@@ -8,6 +8,10 @@ export function fetchTickers() {
   return API.get('/tickers').then(r => r.data);
 }
 
+export function fetchAllTickers() {
+  return API.get('/tickers/all').then(r => r.data);
+}
+
 export function fetchFilings(tickers) {
   const params = tickers && tickers.length > 0
     ? { tickers: tickers.join(',') }
@@ -15,10 +19,10 @@ export function fetchFilings(tickers) {
   return API.get('/filings', { params }).then(r => r.data);
 }
 
-export function fetchPortfolio(tickers) {
-  return API.get('/portfolio', {
-    params: { tickers: tickers.join(',') },
-  }).then(r => r.data);
+export function fetchPortfolio(tickers, riskTolerance) {
+  const params = { tickers: tickers.join(',') };
+  if (riskTolerance) params.risk_tolerance = riskTolerance;
+  return API.get('/portfolio', { params }).then(r => r.data);
 }
 
 export function fetchSections(tickers, top = 10) {
@@ -68,5 +72,43 @@ export function getPipelineStatus(jobId) {
 export function fetchRiskNarrative(tickers) {
   return API.get('/risk-narrative', {
     params: { tickers: tickers.join(',') },
+  }).then(r => r.data);
+}
+
+export function subscribePipelineLogs(jobId, onLog, onDone, onError) {
+  const baseUrl = import.meta.env.VITE_API_URL || '/api';
+  const es = new EventSource(`${baseUrl}/pipeline/logs/${jobId}`);
+
+  es.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'log') onLog(data);
+      else if (data.type === 'done') { onDone(data); es.close(); }
+      else if (data.type === 'error') { onError(data); es.close(); }
+    } catch { /* ignore parse errors */ }
+  };
+
+  es.onerror = () => {
+    onError({ msg: 'Connection lost' });
+    es.close();
+  };
+
+  return es;
+}
+
+export function fetchSectionChangeSummary({ ticker, section, snippet_old, snippet_new }) {
+  return API.post('/sections/summarize', {
+    ticker,
+    section,
+    snippet_old,
+    snippet_new,
+  }).then(r => r.data);
+}
+
+export function analyzeSection({ ticker, section, accession }) {
+  return API.post('/sections/analyze', {
+    ticker,
+    section,
+    accession: accession || null,
   }).then(r => r.data);
 }

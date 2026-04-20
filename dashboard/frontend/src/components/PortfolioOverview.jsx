@@ -1,6 +1,10 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { runPipeline, getPipelineStatus } from '../api';
 
+const W_CHANGE = 0.60;
+const W_ATTENTION = 0.30;
+const W_CAR = 0.10;
+
 function fmt(val, decimals = 4) {
   if (val == null || isNaN(val)) return 'N/A';
   return Number(val).toFixed(decimals);
@@ -20,12 +24,45 @@ function badgeClass(las) {
   return 'badge-low';
 }
 
+const SIGNAL_CONFIG = {
+  sell:    { label: 'SELL',    cls: 'signal-sell',    tip: 'Large disclosure changes with low investor attention — risk of negative drift.' },
+  caution: { label: 'CAUTION', cls: 'signal-caution', tip: 'Material changes detected with negative market reaction — reassess position.' },
+  hold:   { label: 'HOLD',    cls: 'signal-hold',    tip: 'Disclosure impact appears priced in — no action needed.' },
+  neutral: { label: 'NEUTRAL', cls: 'signal-neutral', tip: 'No strong signal — maintain current position.' },
+  buy:    { label: 'BUY',     cls: 'signal-buy',     tip: 'Stable filings with no negative signal or underreaction opportunity.' },
+};
+
+function SignalBadge({ signal, confidence, confidenceLevel, reasons }) {
+  const cfg = SIGNAL_CONFIG[signal] || SIGNAL_CONFIG.neutral;
+  const solidClass = confidenceLevel === 'strong' ? 'signal-strong' : '';
+  const lines = reasons?.length ? reasons : [cfg.tip];
+  const tip = lines.join('\n') + `\nConfidence: ${(confidence ?? 0).toFixed(2)} (${confidenceLevel || 'weak'})`;
+
+  return (
+    <span className="col-tip tip-right" data-tip={tip}>
+      <span className={`signal-badge ${cfg.cls} ${solidClass}`}>
+        {cfg.label}
+      </span>
+    </span>
+  );
+}
+
 const POLL_INTERVAL = 3000;
 
-function PortfolioOverview({ portfolio, filings, onRefresh }) {
+function PortfolioOverview({ portfolio, filings, onRefresh, onProcessWithLogs, pipelineJobs }) {
   const [processing, setProcessing] = useState({});
   const [errors, setErrors] = useState({});
   const pollTimers = useRef({});
+
+  // Build a map of ticker -> current stage from active pipeline jobs
+  const tickerStages = {};
+  if (pipelineJobs) {
+    for (const job of pipelineJobs) {
+      if (job.status === 'running') {
+        job.tickers.forEach(t => { tickerStages[t] = job.currentStage || 'starting'; });
+      }
+    }
+  }
 
   const missingTickers = (portfolio?.holdings || [])
     .filter(h => h.las == null)
@@ -79,7 +116,25 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
 
     runPipeline(tickerList)
       .then(data => {
-        pollJob(data.job_id, tickerList);
+        // Mark skipped tickers with errors, remove from processing
+        const skipped = data.skipped || [];
+        if (skipped.length) {
+          setProcessing(prev => {
+            const next = { ...prev };
+            skipped.forEach(t => delete next[t]);
+            return next;
+          });
+          setErrors(prev => {
+            const next = { ...prev };
+            skipped.forEach(t => { next[t] = 'No CIK mapping — may be delisted'; });
+            return next;
+          });
+        }
+        // Poll only for valid tickers
+        const validTickers = data.tickers || tickerList.filter(t => !skipped.includes(t));
+        if (validTickers.length) {
+          pollJob(data.job_id, validTickers);
+        }
       })
       .catch(err => {
         setProcessing(prev => {
@@ -144,37 +199,141 @@ function PortfolioOverview({ portfolio, filings, onRefresh }) {
             </button>
           )}
         </div>
-        {(portfolio.holdings || []).map((h, i) => (
-          <div className="holding-row" key={i}>
-            <span className="holding-ticker">{h.ticker}</span>
-            <span className="holding-name">{h.entity_name || ''}</span>
-            {h.las != null ? (
-              <span className={`holding-badge ${badgeClass(h.las)}`}>
-                {fmt(h.las)}
-              </span>
-            ) : (
-              <span className="holding-actions">
-                {errors[h.ticker] && (
-                  <span className="holding-error" title={errors[h.ticker]}>Error</span>
-                )}
-                {processing[h.ticker] ? (
-                  <span className="holding-badge holding-processing">Processing...</span>
-                ) : (
-                  <>
-                    <span className="holding-badge badge-na">Not processed</span>
-                    <button
-                      className="holding-process-btn"
-                      onClick={() => handleProcess(h.ticker)}
-                      disabled={anyProcessing}
-                    >
-                      Process
-                    </button>
-                  </>
-                )}
-              </span>
-            )}
-          </div>
-        ))}
+        <table className="holdings-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Company</th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip="Weighted contribution from year-over-year 10-K language changes. Positive means large disclosure changes increase the LAS score. Weight: 50%">
+                  Change
+                </span>
+              </th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip="Weighted contribution from abnormal trading volume around the filing date. Negative because high investor attention lowers the LAS score (lazy prices = inattention). Weight: -25%">
+                  Attention
+                </span>
+              </th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip={"Weighted contribution from cumulative abnormal return (stock vs S&P 500) around the filing date. Positive means a larger market reaction increases the LAS score. Weight: 25%"}>
+                  CAR
+                </span>
+              </th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip="Lazy Attention Score = Change - Attention - CAR. Higher means more material changes with less investor attention. Green ≥ 0.50, Yellow ≥ 0.25, Red < 0.25">
+                  LAS
+                </span>
+              </th>
+              <th className="ht-num">
+                <span className="col-tip" data-tip="Buy/sell signal derived from LAS components. Based on filing change analysis — not investment advice.">
+                  Signal
+                </span>
+              </th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(portfolio.holdings || []).map((h, i) => {
+              const hasBreakdown = h.las != null && h.norm_change != null;
+              const changeC = hasBreakdown ? W_CHANGE * Number(h.norm_change) : null;
+              const attnC = hasBreakdown ? -(W_ATTENTION * Number(h.norm_attention || 0)) : null;
+              const carC = hasBreakdown ? -(W_CAR * Number(h.norm_car || 0)) : null;
+
+              return (
+                <tr key={i}>
+                  <td className="ht-ticker">{h.ticker}</td>
+                  <td className="ht-name">{h.entity_name || ''}</td>
+                  <td className="ht-num">
+                    {changeC != null ? (
+                      <span className="col-tip" data-tip={`+${changeC.toFixed(3)} added to LAS. Higher = more filing language changed year-over-year.`}>
+                        +{changeC.toFixed(3)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  <td className="ht-num">
+                    {attnC != null ? (
+                      <span className="col-tip" data-tip={`${attnC.toFixed(3)} subtracted from LAS. More negative = investors paid more attention (reduces mispricing opportunity).`}>
+                        {attnC.toFixed(3)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  <td className="ht-num">
+                    {carC != null ? (
+                      <span className="col-tip" data-tip={`${carC.toFixed(3)} subtracted from LAS. Negative CAR (market overreaction) increases LAS via mean-reversion signal.`}>
+                        {carC.toFixed(3)}
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  <td className="ht-num">
+                    {h.las != null ? (
+                      <span className="col-tip" data-tip={h.las >= 0.5
+                        ? 'High LAS: Large disclosure changes + low investor attention. Potential mispricing opportunity.'
+                        : h.las >= 0.25
+                          ? 'Moderate LAS: Some notable changes. Worth monitoring for potential mispricing.'
+                          : 'Low LAS: Minor changes or high investor attention. Market likely priced in.'}>
+                        <span className={`holding-badge ${badgeClass(h.las)}`}>
+                          {fmt(h.las)}
+                        </span>
+                      </span>
+                    ) : '\u2014'}
+                  </td>
+                  <td className="ht-num">
+                    {h.signal ? (
+                      <SignalBadge
+                        signal={h.signal}
+                        confidence={h.signal_confidence}
+                        confidenceLevel={h.signal_confidence_level}
+                        reasons={h.signal_reasons}
+                      />
+                    ) : '\u2014'}
+                  </td>
+                  <td>
+                    {h.las == null && (
+                      <span className="holding-actions">
+                        {errors[h.ticker] ? (
+                          <span className="holding-error-wrap">
+                            <span className="holding-error" title={errors[h.ticker]}>
+                              {errors[h.ticker].length > 40
+                                ? errors[h.ticker].slice(0, 40) + '...'
+                                : errors[h.ticker]}
+                            </span>
+                            {!errors[h.ticker].includes('delisted') && !errors[h.ticker].includes('CIK') && (
+                              <button
+                                className="holding-retry-btn"
+                                onClick={() => {
+                                  setErrors(prev => { const n = {...prev}; delete n[h.ticker]; return n; });
+                                  onProcessWithLogs ? onProcessWithLogs(h.ticker) : handleProcess(h.ticker);
+                                }}
+                              >
+                                Retry
+                              </button>
+                            )}
+                          </span>
+                        ) : (processing[h.ticker] || tickerStages[h.ticker]) ? (
+                          <span className="holding-badge holding-processing">
+                            Processing{tickerStages[h.ticker] ? ` (${tickerStages[h.ticker]})` : '...'}
+                          </span>
+                        ) : (
+                          <button
+                            className="holding-process-btn"
+                            onClick={() => onProcessWithLogs ? onProcessWithLogs(h.ticker) : handleProcess(h.ticker)}
+                            disabled={anyProcessing}
+                          >
+                            Process
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="signal-disclaimer">
+          Signals are derived from SEC 10-K filing change analysis and are not investment advice.
+          Always conduct independent due diligence before making investment decisions.
+        </div>
       </div>
     </>
   );

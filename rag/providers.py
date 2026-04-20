@@ -19,9 +19,9 @@ sys.path.insert(0, PROJECT_ROOT)
 import config  # noqa: E402
 
 
-# ===================================================================
+# 
 # Embedding Provider
-# ===================================================================
+# 
 
 class EmbeddingProvider(ABC):
     @abstractmethod
@@ -70,9 +70,9 @@ class OpenAIEmbeddings(EmbeddingProvider):
         return self._dim
 
 
-# ===================================================================
+# 
 # LLM Provider
-# ===================================================================
+# 
 
 class LLMProvider(ABC):
     @abstractmethod
@@ -98,9 +98,9 @@ class OpenAIChat(LLMProvider):
         return resp.choices[0].message.content.strip()
 
 
-# ===================================================================
+# 
 # Vector Store Provider
-# ===================================================================
+# 
 
 class VectorStoreProvider(ABC):
     @abstractmethod
@@ -119,6 +119,7 @@ class VectorStoreProvider(ABC):
         query_embedding: list[float],
         top_k: int = 5,
         where: dict | None = None,
+        where_document: dict | None = None,
     ) -> list[dict]:
         """Return top-K results as list of {id, document, metadata, distance}."""
 
@@ -163,6 +164,7 @@ class ChromaVectorStore(VectorStoreProvider):
         query_embedding: list[float],
         top_k: int = 5,
         where: dict | None = None,
+        where_document: dict | None = None,
     ) -> list[dict]:
         kwargs: dict[str, Any] = {
             "query_embeddings": [query_embedding],
@@ -171,6 +173,8 @@ class ChromaVectorStore(VectorStoreProvider):
         }
         if where:
             kwargs["where"] = where
+        if where_document:
+            kwargs["where_document"] = where_document
 
         results = self._collection.query(**kwargs)
 
@@ -194,9 +198,7 @@ class ChromaVectorStore(VectorStoreProvider):
             pass
 
 
-# ===================================================================
 # Factory
-# ===================================================================
 
 def get_embedding_provider() -> EmbeddingProvider:
     provider = getattr(config, "RAG_EMBEDDING_PROVIDER", "openai")
