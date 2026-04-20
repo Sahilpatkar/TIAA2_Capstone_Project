@@ -30,6 +30,8 @@ deploy/terraform/.terraform.lock.hcl
 deploy/terraform/terraform.tfstate
 deploy/terraform/terraform.tfstate.backup
 deploy/terraform/terraform.tfvars
+deploy/docker/terraform.tfstate
+deploy/docker/terraform.tfstate.backup
 
 # IDE
 .vscode/

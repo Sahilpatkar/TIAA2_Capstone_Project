@@ -25,7 +25,7 @@ curl -SL "https://github.com/docker/buildx/releases/download/$${BUILDX_VERSION}/
 chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # ---- Clone project ----
-git clone ${git_repo_url} /opt/lazyprices || true
+git clone -b ${git_branch} ${git_repo_url} /opt/lazyprices || true
 cd /opt/lazyprices
 
 # ---- Fetch OpenAI API key from SSM Parameter Store ----

@@ -147,6 +147,7 @@ resource "aws_instance" "lazyprices" {
   user_data = templatefile("${path.module}/../scripts/user_data.sh", {
     aws_region   = var.aws_region
     git_repo_url = var.git_repo_url
+    git_branch   = var.git_branch
   })
 
   tags = { Name = "lazyprices-dashboard" }

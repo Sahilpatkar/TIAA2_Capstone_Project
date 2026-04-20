@@ -32,3 +32,9 @@ variable "git_repo_url" {
   type        = string
   default     = "https://github.com/your-org/TIAA2_Capstone_Project.git"
 }
+
+variable "git_branch" {
+  description = "Git branch to deploy (default: main)"
+  type        = string
+  default     = "main"
+}
