@@ -9,16 +9,19 @@ The pipeline pulls 10-K filings from SEC EDGAR, extracts and cleans the text, co
 ### Option A: Local (no Docker)
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# 1. Install the package in editable mode (installs deps via requirements.txt)
+pip install -e .
 
 # 2. Run the full pipeline for Apple (CIK 320193)
-python run_pipeline.py --ciks 320193
+tiaa-pipeline --ciks 320193
 
 # 3. Start the dashboard
 cd dashboard/backend && python app.py        # Terminal 1 (port 5001)
 cd dashboard/frontend && npm install && npm run dev  # Terminal 2 (port 5173)
 ```
+
+> `pip install -e .` makes the `tiaa` package importable everywhere and exposes the
+> `tiaa-pipeline` console script — no `sys.path` hacks or `PYTHONPATH` needed.
 
 ### Option B: Docker (recommended)
 
@@ -36,52 +39,72 @@ docker compose --profile pipeline run --rm pipeline --ciks 320193
 # 4. Open http://localhost in your browser
 ```
 
+## Package Layout
+
+All pipeline code lives in the installable `tiaa` package under `src/tiaa/`, organized
+by domain:
+
+```
+src/tiaa/
+├── pipeline/        # document_pull, extract_clean, run (orchestrator)
+├── storage/         # embeddings, store (DB persistence)
+├── analysis/        # similarity, numeric_change, attention_proxy,
+│                    # abnormal_returns, las, signals
+├── backtest/        # core, comparison
+├── advisor/         # query (portfolio narrative + sentiment)
+└── config/          # paths, sec, features, las, signals, pipeline, llm_rag
+                     # + reference/*.json lookup tables
+```
+
+The RAG layer stays at the repo root under `rag/` and the dashboard under
+`dashboard/`; both import from `tiaa.*`.
+
 ## Pipeline Architecture
 
 ```
-SEC EDGAR ─► document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
+SEC EDGAR ─► pipeline/document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
                                        │
-                                extract_clean.py
+                             pipeline/extract_clean.py
                                        │
                               Cleaned text + sections (cleaned/)
                                        │
-                               embeddings.py (count vectors)
+                            storage/embeddings.py (count vectors)
                                        │
           ┌────────────────────────────┼────────────────────────────┐
-    similarity.py           numeric_change.py           abnormal_returns.py
-    (cosine/Jaccard)        (numerical divergence)      (Yahoo Finance CAR)
-          │                 attention_proxy.py                      │
-          │                 (placeholder 0.5)                       │
+ analysis/similarity.py    analysis/numeric_change.py    analysis/abnormal_returns.py
+    (cosine/Jaccard)        (numerical divergence)       (Yahoo Finance CAR)
+          │                 analysis/attention_proxy.py              │
+          │                 (placeholder 0.5)                        │
           └────────────────────────────┼────────────────────────────┘
                                        │
-                          las.py (Lazy Attention Score)
+                          analysis/las.py (Lazy Attention Score)
                                        │
-                          store.py (PostgreSQL / SQLite)
+                          storage/store.py (PostgreSQL / SQLite)
                                        │
                     ┌──────────────────┼──────────────────┐
-              signals.py         advisor_query.py       backtest.py
-              (buy/sell)     (LLM narrative + sentiment) (validation)
+         analysis/signals.py    advisor/query.py     backtest/core.py
+              (buy/sell)    (LLM narrative + sentiment) (validation)
 ```
 
 ## Module Reference
 
 | Module | Description |
 |---|---|
-| `config.py` | Central configuration: paths, LAS weights, CIK-ticker mapping (S&P 500), universe mode, section weights, CAR window, database URL |
-| `document_pull.py` | Pull 10-K filings from SEC EDGAR; saves raw HTML and `company_facts.json` under `entityName_cik/` |
-| `extract_clean.py` | Parse iXBRL HTML, strip noise (scripts, styles, XBRL blocks, numeric tables), split text by Item section |
-| `embeddings.py` | Build count vectors (or TF-IDF) per document and per section using sklearn |
-| `similarity.py` | Pair each 10-K with its prior-year filing, compute cosine and Jaccard similarity, derive change intensity |
-| `attention_proxy.py` | MVP placeholder returning 0.5 for all filings (pending SEC FOIA download data) |
-| `abnormal_returns.py` | Fetch daily prices from Yahoo Finance, compute market-adjusted CAR over a configurable event window |
-| `las.py` | Combine change intensity, attention proxy, and CAR into a weighted LAS with rank or z-score normalization |
-| `store.py` | Database persistence layer (PostgreSQL via Docker, SQLite fallback); upsert by `(cik, accession)` |
-| `numeric_change.py` | Extract financial numbers (dollars, percentages) from filing text; compute numerical divergence scores |
-| `advisor_query.py` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative with sentiment classification |
-| `run_pipeline.py` | End-to-end CLI orchestrator that runs all stages for a given set of CIKs, with incremental processing and parallel workers |
-| `signals.py` | Classify holdings into 5 signal categories (sell, caution, hold, neutral, buy) using LAS components with confidence scoring |
-| `backtest.py` | Validation framework measuring whether LAS and signal classifications predict forward stock returns (30d/60d/90d/180d horizons) |
-| `backtest_comparison.py` | Comparative analysis across different signal configurations and LAS weight schemes |
+| `tiaa.config` | Config package: paths, SEC/universe, features, LAS, signals, pipeline, LLM/RAG. Lookup tables (`CIK_TO_TICKER`, `TICKER_SECTOR_INDUSTRY`) live in `config/reference/*.json` and are loaded lazily. Importing `from tiaa import config` continues to expose every public symbol. |
+| `tiaa.pipeline.document_pull` | Pull 10-K filings from SEC EDGAR; saves raw HTML and `company_facts.json` under `entityName_cik/` |
+| `tiaa.pipeline.extract_clean` | Parse iXBRL HTML, strip noise (scripts, styles, XBRL blocks, numeric tables), split text by Item section |
+| `tiaa.pipeline.run` | End-to-end CLI orchestrator (installed as the `tiaa-pipeline` console script) with incremental processing and parallel workers |
+| `tiaa.storage.embeddings` | Build count vectors (or TF-IDF) per document and per section using sklearn |
+| `tiaa.storage.store` | Database persistence layer (PostgreSQL via Docker, SQLite fallback); upsert by `(cik, accession)` |
+| `tiaa.analysis.similarity` | Pair each 10-K with its prior-year filing, compute cosine and Jaccard similarity, derive change intensity |
+| `tiaa.analysis.attention_proxy` | MVP placeholder returning 0.5 for all filings (pending SEC FOIA download data) |
+| `tiaa.analysis.abnormal_returns` | Fetch daily prices from Yahoo Finance, compute market-adjusted CAR over a configurable event window |
+| `tiaa.analysis.las` | Combine change intensity, attention proxy, and CAR into a weighted LAS with rank or z-score normalization |
+| `tiaa.analysis.numeric_change` | Extract financial numbers (dollars, percentages) from filing text; compute numerical divergence scores |
+| `tiaa.analysis.signals` | Classify holdings into 5 signal categories (sell, caution, hold, neutral, buy) using LAS components with confidence scoring |
+| `tiaa.advisor.query` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative with sentiment classification |
+| `tiaa.backtest.core` | Validation framework measuring whether LAS and signal classifications predict forward stock returns (30d/60d/90d/180d horizons) |
+| `tiaa.backtest.comparison` | Comparative analysis across different signal configurations and LAS weight schemes |
 | `rag/chunker.py` | Section-aware text chunker for 10-K filings with configurable max size and overlap |
 | `rag/providers.py` | Provider abstractions for embeddings (OpenAI), LLM (OpenAI), and vector store (ChromaDB) |
 | `rag/index.py` | CLI tool to embed and index filings into the vector store with manifest-based deduplication |
@@ -94,7 +117,7 @@ SEC EDGAR ─► document_pull.py ─► Raw HTML (data/filings/entityName_cik/)
 LAS = w_change * f(change_intensity) - w_attention * f(attention_proxy) + w_car * f(|CAR|)
 ```
 
-Where `f()` is a cross-sectional normalization (rank percentile by default). Weights are configurable in `config.py`:
+Where `f()` is a cross-sectional normalization (rank percentile by default). Weights live in `tiaa.config.las`:
 
 | Weight | Default | Component |
 |---|---|---|
@@ -104,7 +127,7 @@ Where `f()` is a cross-sectional normalization (rank percentile by default). Wei
 
 ## Signal Classification
 
-The `signals.py` module classifies each holding into one of five actionable signals based on LAS components:
+`tiaa.analysis.signals` classifies each holding into one of five actionable signals based on LAS components:
 
 | Signal | Meaning |
 |---|---|
@@ -118,10 +141,10 @@ Confidence is a blend of absolute (global universe) and relative (portfolio-only
 
 ## Backtesting & Validation
 
-The `backtest.py` module measures whether LAS and signal classifications predict real-world forward stock returns. Forward returns are computed starting **after** the CAR event window ends (day +6) to avoid circularity, since CAR is an input to the LAS formula.
+`tiaa.backtest.core` measures whether LAS and signal classifications predict real-world forward stock returns. Forward returns are computed starting **after** the CAR event window ends (day +6) to avoid circularity, since CAR is an input to the LAS formula.
 
 ```bash
-python backtest.py --output results/
+python -m tiaa.backtest.core --output results/
 ```
 
 **Metrics computed:**
@@ -129,7 +152,7 @@ python backtest.py --output results/
 - Signal hit rates and average returns by signal category
 - Forward horizons: 30, 60, 90, and 180 trading days
 
-The `backtest_comparison.py` module extends this with comparative analysis across different signal configurations and LAS weight schemes.
+`tiaa.backtest.comparison` extends this with comparative analysis across different signal configurations and LAS weight schemes.
 
 ## Database
 
@@ -160,18 +183,37 @@ The pipeline tracks which filings have been fully processed and skips them on su
 **Manual override:** Pass `--force` to reprocess everything regardless of tracking state.
 
 ```bash
-python run_pipeline.py --ciks 320193 --force
+tiaa-pipeline --ciks 320193 --force
 ```
 
-**Version bumping:** When pipeline logic changes materially (new LAS formula, new similarity metric, etc.), bump `PIPELINE_VERSION` in `config.py`. All filings will be reprocessed on the next run because the version check will fail against older records.
+**Version bumping:** When pipeline logic changes materially (new LAS formula, new similarity metric, etc.), bump `PIPELINE_VERSION` in `tiaa/config/pipeline.py`. All filings will be reprocessed on the next run because the version check will fail against older records.
 
 ## Configuration
 
-All tunable parameters live in `config.py`:
+The old monolithic `config.py` has been split into `src/tiaa/config/` — one module per
+domain — with the two largest lookup tables lifted out into JSON so they're easy to edit
+without touching Python.
 
-- **UNIVERSE_MODE** -- `"demo"` (50 tickers) or `"full"` (S&P 500); controls which subset of CIK_TO_TICKER is active
+| Submodule | What lives there |
+|---|---|
+| `config/paths.py` | `PROJECT_ROOT`, `DATA_DIR`, `FILINGS_DIR`, `VECTORS_DIR`, `DB_PATH`, `DATABASE_URL` |
+| `config/sec.py` | `FILING_TYPES`, `UNIVERSE_MODE`, `DEMO_TICKERS`, `CIK_TO_TICKER`, `TICKER_SECTOR_INDUSTRY` |
+| `config/features.py` | `ITEM_SECTIONS`, `SECTION_WEIGHTS`, `SIMILARITY_MEASURES`, `NUMERIC_TABLE_THRESHOLD`, `NUMERIC_CHANGE_ALPHA` |
+| `config/las.py` | `LAS_WEIGHTS`, `LAS_NORMALIZATION`, `CAR_WINDOW`, `MARKET_TICKER`, attention composite weights |
+| `config/signals.py` | `SIGNAL_THRESHOLDS`, `SIGNAL_CONFIDENCE`, `SIGNAL_KEY_SECTIONS` |
+| `config/pipeline.py` | `PIPELINE_VERSION`, `PIPELINE_WORKERS`, `PAIRING_DAY_RANGE` |
+| `config/llm_rag.py` | `LLM_MODEL` + all `RAG_*` settings |
+| `config/reference/*.json` | `cik_to_ticker.json` (~500 entries) and `ticker_sector_industry.json` (~500 entries); loaded lazily on first access |
+
+For backward compatibility, `from tiaa import config` still re-exports every public
+symbol — existing callers like `config.LAS_WEIGHTS` keep working unchanged. New code
+can import directly from the submodule, e.g. `from tiaa.config.paths import DB_PATH`.
+
+Key tunables:
+
+- **UNIVERSE_MODE** -- `"demo"` (50 tickers) or `"full"` (S&P 500); controls which subset of `CIK_TO_TICKER` is active
 - **DATABASE_URL** -- database connection string; reads from env, falls back to SQLite
-- **PIPELINE_VERSION** -- pipeline version string (default `"1.5"`); bump to force reprocessing after logic changes
+- **PIPELINE_VERSION** -- pipeline version string; bump to force reprocessing after logic changes
 - **LAS_WEIGHTS** -- component weights for the LAS formula
 - **LAS_NORMALIZATION** -- `"rank"` (percentile) or `"zscore"`
 - **CAR_WINDOW** -- event window in trading days, default `(-1, 5)`
@@ -179,7 +221,6 @@ All tunable parameters live in `config.py`:
 - **NUMERIC_CHANGE_ALPHA** -- blend weight for text vs. numerical change intensity (default `0.7` text / `0.3` numerical)
 - **SECTION_WEIGHTS** -- per-section importance weights for weighted LAS (MD&A 0.30, Risk Factors 0.25, Business 0.15, etc.)
 - **PIPELINE_WORKERS** -- number of concurrent CIK workers (default `4`); overridden by `--workers` CLI flag
-- **CIK_TO_TICKER** -- mapping of CIK integers to ticker symbols (S&P 500 pre-loaded, filtered by UNIVERSE_MODE)
 - **LLM_MODEL** -- OpenAI model for advisor narratives (default `gpt-4o-mini`)
 
 ## Advisor Narrative
@@ -189,10 +230,10 @@ The advisor query generates a structured explanation of the portfolio's LAS anal
 ```bash
 # With LLM narrative
 export OPENAI_API_KEY="sk-..."
-python advisor_query.py --portfolio AAPL,JPM,KO --top 5
+python -m tiaa.advisor.query --portfolio AAPL,JPM,KO --top 5
 
 # Template fallback (no API key needed)
-python advisor_query.py --portfolio AAPL --top 3
+python -m tiaa.advisor.query --portfolio AAPL --top 3
 ```
 
 ## RAG-Enhanced Chat
@@ -243,7 +284,7 @@ User question
 
 ### RAG Configuration
 
-Settings in `config.py`:
+Settings in `tiaa/config/llm_rag.py`:
 
 | Setting | Default | Description |
 |---|---|---|
@@ -257,10 +298,27 @@ Settings in `config.py`:
 | `RAG_CHUNK_OVERLAP` | `200` | Overlap characters between sub-chunks |
 | `RAG_TOP_K` | `5` | Number of passages retrieved per query |
 
-## Data Layout
+## Repo Layout
 
 ```
 project_root/
+├── src/tiaa/                       # Installable Python package (`pip install -e .`)
+│   ├── config/                     # Split config package + reference/*.json lookup tables
+│   ├── pipeline/                   # document_pull, extract_clean, run (CLI entrypoint)
+│   ├── storage/                    # embeddings, store (DB persistence)
+│   ├── analysis/                   # similarity, numeric_change, attention_proxy,
+│   │                               # abnormal_returns, las, signals
+│   ├── backtest/                   # core, comparison
+│   └── advisor/                    # query (portfolio narrative + sentiment)
+├── rag/                            # Retrieval-augmented generation layer
+│   ├── chunker.py                  # Section-aware filing chunker
+│   ├── providers.py                # Embedding, LLM, vector store abstractions
+│   └── index.py                    # CLI indexing tool
+├── dashboard/
+│   ├── backend/
+│   │   ├── app.py                  # Flask API server
+│   │   └── chat.py                 # RAG-enhanced chat handler
+│   └── frontend/                   # React + Vite dashboard
 ├── data/
 │   ├── las_store.db                # SQLite database (local dev fallback)
 │   ├── filings/                    # Downloaded 10-K filings by entity
@@ -273,22 +331,17 @@ project_root/
 │   └── vectordb/                   # ChromaDB persistence (RAG embeddings)
 ├── deploy/
 │   ├── docker/
-│   │   ├── Dockerfile.backend      # Python 3.10 + Gunicorn
+│   │   ├── Dockerfile.backend      # Python 3.10 + `pip install -e .` + Gunicorn
 │   │   ├── Dockerfile.frontend     # Node 18 build + Nginx
 │   │   ├── docker-compose.yml      # PostgreSQL, backend, frontend, pipeline
 │   │   └── nginx.conf              # Static files + /api reverse proxy
 │   ├── terraform/                  # AWS EC2 infrastructure
 │   └── scripts/
 │       └── user_data.sh            # EC2 bootstrap script
-├── rag/
-│   ├── chunker.py                  # Section-aware filing chunker
-│   ├── providers.py                # Embedding, LLM, vector store abstractions
-│   └── index.py                    # CLI indexing tool
-├── dashboard/
-│   ├── backend/
-│   │   ├── app.py                  # Flask API server
-│   │   └── chat.py                 # RAG-enhanced chat handler
-│   └── frontend/                   # React + Vite dashboard
+├── notebooks/                      # Jupyter notebooks (demo, backtest, textual analysis)
+├── docs/
+│   ├── dashboard_qr.png
+│   └── research/                   # Reference PDFs (Lazy Prices paper, etc.)
 ├── Reports/                        # Validation reports and presentation materials
 │   ├── EXECUTIVE_REPORT.md
 │   ├── TECHNICAL_REPORT.md
@@ -296,15 +349,19 @@ project_root/
 │   └── ...
 ├── scripts/
 │   └── poster_component_ic_chart.py  # IC chart generation for poster
-├── tests/                          # pytest test suite (14 modules)
-├── config.py
-├── store.py
-├── signals.py                      # Signal classification
-├── backtest.py                     # Backtesting framework
-├── run_pipeline.py
+├── tests/                          # pytest test suite (14 modules, 158 tests)
+├── pyproject.toml                  # Package metadata + `tiaa-pipeline` console script
+├── requirements.txt
 ├── DEPLOYMENT.md                   # AWS deployment guide
-└── requirements.txt
+└── README.md
 ```
+
+> **Note on recent structural changes:** The repo was recently tidied — root-level
+> `.py` files (`config.py`, `run_pipeline.py`, `store.py`, `signals.py`, `backtest.py`,
+> etc.) are gone. Their contents moved into `src/tiaa/` submodules and the package is
+> installed via `pyproject.toml`. Notebooks moved to `notebooks/`, reference PDFs to
+> `docs/research/`, and `config.py` was split into the `tiaa.config` package with its
+> large lookup tables lifted into `config/reference/*.json`.
 
 ## Requirements
 
@@ -324,8 +381,11 @@ The React frontend (`dashboard/frontend/`) uses Vite and requires Node.js 18+. K
 
 ## CLI Reference
 
+After `pip install -e .`, the orchestrator is exposed as the `tiaa-pipeline` console
+script (equivalent to `python -m tiaa.pipeline.run`):
+
 ```
-python run_pipeline.py [OPTIONS]
+tiaa-pipeline [OPTIONS]
 
 Options:
   --ciks TEXT          Comma-separated CIK numbers (default: all tickers in config)
@@ -333,7 +393,7 @@ Options:
   --max-filings INT    Max filings to process per CIK
   --force              Reprocess all filings even if already up to date
   --rescore-only       Only re-compute LAS from existing DB values (no data fetching)
-  --workers INT        Number of parallel CIK workers (default: config.PIPELINE_WORKERS=4)
+  --workers INT        Number of parallel CIK workers (default: PIPELINE_WORKERS=4)
 ```
 
 ## Advisor Dashboard
@@ -441,10 +501,10 @@ The application can be deployed to a single EC2 instance using Docker Compose an
 
 ## Scope and Future Work
 
-- **Universe**: S&P 500 tickers pre-loaded; switchable between `"demo"` (50 tickers) and `"full"` (500) via `UNIVERSE_MODE` in `config.py`
+- **Universe**: S&P 500 tickers pre-loaded; switchable between `"demo"` (50 tickers) and `"full"` (500) via `UNIVERSE_MODE` in `tiaa.config.sec`
 - **Filing types**: 10-K annual reports with section weights; 10-Q quarterly support is configured but not fully end-to-end yet
 - **Attention proxy**: Currently a placeholder (constant 0.5); will be replaced when SEC FOIA download data is integrated
-- **Dense embeddings**: A `--dense` flag hook exists in `embeddings.py` for future `sentence-transformers` integration
+- **Dense embeddings**: A `--dense` flag hook exists in `tiaa.storage.embeddings` for future `sentence-transformers` integration
 - **Additional similarity measures**: MinEdit and Sim Simple from the paper can be added alongside the existing cosine and Jaccard measures
 - **Sentiment classification**: Section-level sentiment (positive/negative/neutral) with rationale is supported via OpenAI; template fallback returns `"unknown"`
 - **Signal refinement**: Walk-forward backtests, sector-neutral portfolio construction, and ML overlay for non-linear interactions are planned (see `Reports/NEXT_STEPS_RECOMMENDATIONS.md`)
