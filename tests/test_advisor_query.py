@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from advisor_query import (
+from tiaa.advisor.query import (
     aggregate_las,
     retrieve_high_impact_sections,
     _template_narrative,
 )
-from store import LASStore
+from tiaa.storage.store import LASStore
 
 
 def _seed_store(store: LASStore):

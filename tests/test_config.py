@@ -2,7 +2,7 @@
 
 import os
 
-import config
+from tiaa import config
 
 
 class TestCikTickerMapping:

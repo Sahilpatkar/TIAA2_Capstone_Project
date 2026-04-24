@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from extract_clean import (
+from tiaa.pipeline.extract_clean import (
     _numeric_fraction,
     _normalize_whitespace,
     _canonical_section_key,

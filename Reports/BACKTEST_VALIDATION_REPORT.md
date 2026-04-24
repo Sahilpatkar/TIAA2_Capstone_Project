@@ -418,7 +418,7 @@ PYTHONUNBUFFERED=1 python3 backtest.py
 #   - confusion_matrix.csv  Signal vs outcome cross-tabulation
 
 # Interactive analysis
-jupyter notebook Backtest_Validation.ipynb
+jupyter notebook notebooks/Backtest_Validation.ipynb
 ```
 
 ---

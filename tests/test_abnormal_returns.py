@@ -6,13 +6,13 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from abnormal_returns import (
+from tiaa.analysis.abnormal_returns import (
     _trading_days_around,
     resolve_ticker,
     compute_car,
     compute_volume_ratio,
 )
-import config
+from tiaa import config
 
 
 class TestTradingDaysAround:
@@ -47,7 +47,7 @@ class TestResolveTicker:
 
 
 class TestComputeCarMocked:
-    @patch("abnormal_returns._daily_returns")
+    @patch("tiaa.analysis.abnormal_returns._daily_returns")
     def test_empty_data_returns_none(self, mock_returns):
         mock_returns.return_value = pd.Series(dtype=float)
         result = compute_car("AAPL", "2024-11-01")
@@ -55,7 +55,7 @@ class TestComputeCarMocked:
         assert result["ticker"] == "AAPL"
         assert result["daily_abnormal"] == []
 
-    @patch("abnormal_returns._daily_returns")
+    @patch("tiaa.analysis.abnormal_returns._daily_returns")
     def test_with_data(self, mock_returns):
         dates = pd.date_range("2024-10-01", periods=60, freq="B")
         stock = pd.Series([0.01] * 60, index=dates)
@@ -67,7 +67,7 @@ class TestComputeCarMocked:
 
 
 class TestComputeVolumeRatioMocked:
-    @patch("abnormal_returns.yf.download")
+    @patch("tiaa.analysis.abnormal_returns.yf.download")
     def test_empty_data_returns_none(self, mock_download):
         mock_download.return_value = pd.DataFrame()
         result = compute_volume_ratio("AAPL", "2024-11-01")

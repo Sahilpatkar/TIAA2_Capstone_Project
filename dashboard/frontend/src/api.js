@@ -61,8 +61,8 @@ export function deleteClient(id) {
   return API.delete(`/clients/${id}`).then(r => r.data);
 }
 
-export function runPipeline(tickers) {
-  return API.post('/pipeline/run', { tickers }).then(r => r.data);
+export function runPipeline(tickers, { force = false } = {}) {
+  return API.post('/pipeline/run', { tickers, force }).then(r => r.data);
 }
 
 export function getPipelineStatus(jobId) {

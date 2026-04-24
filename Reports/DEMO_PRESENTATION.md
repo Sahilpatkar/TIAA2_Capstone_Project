@@ -340,7 +340,7 @@ When Risk Factors (Item 1A) and MD&A (Item 7) both change significantly, we lowe
 
 # Questions?
 
-**Live notebook:** `Backtest_Comparison.ipynb`
+**Live notebook:** `notebooks/Backtest_Comparison.ipynb`
 **Full report:** `Reports/EXECUTIVE_REPORT_DEMO50.md`
 **Technical report:** `Reports/BACKTEST_COMPARISON_REPORT_DEMO50.md`
 **S&P 500 validation:** `Reports/BACKTEST_COMPARISON_REPORT_FULL500.md`

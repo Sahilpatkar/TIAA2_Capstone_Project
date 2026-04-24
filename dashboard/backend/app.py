@@ -19,13 +19,12 @@ from flask import Flask, request, Response
 from flask_cors import CORS
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, PROJECT_ROOT)
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-import config  
-from store import LASStore  
-from advisor_query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
+from tiaa import config  
+from tiaa.storage.store import LASStore  
+from tiaa.advisor.query import aggregate_las, retrieve_high_impact_sections, generate_explanation, summarize_section_change  # noqa: E402
 from chat import handle_chat  
 app = Flask(__name__)
 CORS(app)
@@ -492,7 +491,7 @@ def _load_job(job_id: str) -> dict | None:
         return None
 
 
-def _run_pipeline_subprocess(job_id: str, ciks: list[int]):
+def _run_pipeline_subprocess(job_id: str, ciks: list[int], force: bool = False):
     """Launch the pipeline as a subprocess that writes logs to the job file.
 
     A thin wrapper script is executed so the heavy CPU work (NLP, vectorisation)
@@ -503,13 +502,12 @@ def _run_pipeline_subprocess(job_id: str, ciks: list[int]):
     # 2. Streams stage/log JSON lines to stdout
     # 3. Prints a final status line
     cik_csv = ",".join(str(c) for c in ciks)
+    force_val = "True" if force else "False"
     script = f"""
 import json, logging, sys, os, time
-# cwd is set to PROJECT_ROOT by the parent process
-sys.path.insert(0, os.getcwd())
 
-import config
-from run_pipeline import run as run_pipeline
+from tiaa import config
+from tiaa.pipeline.run import run as run_pipeline
 
 import re as _re
 
@@ -551,7 +549,7 @@ logger.addHandler(StreamHandler())
 
 ciks = [{cik_csv}]
 try:
-    run_pipeline(ciks)
+    run_pipeline(ciks, force={force_val})
     print(json.dumps({{"_status": "completed"}}))
 except Exception as e:
     print(json.dumps({{"_status": "failed", "_error": str(e)}}))
@@ -604,6 +602,7 @@ except Exception as e:
 def api_pipeline_run():
     body = request.get_json(force=True)
     tickers = body.get("tickers", [])
+    force_flag = bool(body.get("force", False))
     if not tickers:
         return json_response({"error": "tickers list is required"}, 400)
 
@@ -643,7 +642,7 @@ def api_pipeline_run():
     }
     _save_job(job_id, job)
 
-    _run_pipeline_subprocess(job_id, ciks)
+    _run_pipeline_subprocess(job_id, ciks, force=force_flag)
 
     resp = {"job_id": job_id, "status": "running", "tickers": valid}
     if unknown:

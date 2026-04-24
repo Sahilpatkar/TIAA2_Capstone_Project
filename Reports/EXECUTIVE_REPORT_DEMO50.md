@@ -124,4 +124,4 @@ Optional fourth initiative: Machine learning overlay to replace the rule-based c
 - **Pipeline version:** 1.5
 - **Full technical report:** `Reports/BACKTEST_COMPARISON_REPORT_DEMO50.md`
 - **Full S&P 500 validation report:** `Reports/BACKTEST_COMPARISON_REPORT_FULL500.md`
-- **Interactive notebook:** `Backtest_Comparison.ipynb` (run all cells to regenerate every chart in this report)
+- **Interactive notebook:** `notebooks/Backtest_Comparison.ipynb` (run all cells to regenerate every chart in this report)

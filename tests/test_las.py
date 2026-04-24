@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import las
+import tiaa.analysis.las as las
 
 
 class TestRankNormalize:

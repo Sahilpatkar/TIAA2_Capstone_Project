@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from similarity import (
+from tiaa.analysis.similarity import (
     _report_date_from_basename,
     _parse_date,
     pair_filings,
