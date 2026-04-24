@@ -167,6 +167,26 @@ body {
 .sidebar-btn:hover { background: var(--color-primary-hover); }
 .sidebar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.sidebar-btn-secondary {
+  margin-top: 8px;
+  background: rgba(255,255,255,0.1);
+  color: #e2e8f0;
+}
+.sidebar-btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.18); }
+
+.sidebar .force-pull-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 12px;
+  color: #c1c7d0;
+  cursor: pointer;
+  user-select: none;
+}
+.sidebar .force-pull-option input { cursor: pointer; margin: 0; }
+
 .sidebar-las {
   margin-top: 20px;
   padding: 14px;

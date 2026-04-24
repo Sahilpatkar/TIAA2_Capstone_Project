@@ -2,9 +2,9 @@
 Index cleaned 10-K filings into the vector store for RAG retrieval.
 
 Usage:
-    python -m rag.index                     # index all filings in the DB
-    python -m rag.index --ticker AAPL       # index filings for one ticker
-    python -m rag.index --reindex           # force re-index everything
+    python -m tiaa.rag.index                     # index all filings in the DB
+    python -m tiaa.rag.index --ticker AAPL       # index filings for one ticker
+    python -m tiaa.rag.index --reindex           # force re-index everything
 """
 
 from __future__ import annotations
@@ -14,15 +14,15 @@ import json
 import os
 import time
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from tiaa import config
 from tiaa.storage.store import LASStore
-from rag.chunker import chunk_filing
-from rag.providers import get_embedding_provider, get_vector_store
+from tiaa.rag.chunker import chunk_filing
+from tiaa.rag.providers import get_embedding_provider, get_vector_store
 
 MANIFEST_PATH = os.path.join(
     getattr(config, "RAG_VECTORDB_DIR", os.path.join(config.DATA_DIR, "vectordb")),

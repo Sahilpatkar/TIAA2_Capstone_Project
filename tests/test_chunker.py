@@ -1,10 +1,10 @@
-"""Tests for rag/chunker.py -- text chunking for RAG."""
+"""Tests for tiaa/rag/chunker.py -- text chunking for RAG."""
 
 import json
 
 import pytest
 
-from rag.chunker import _hard_split, _sub_chunk, chunk_filing
+from tiaa.rag.chunker import _hard_split, _sub_chunk, chunk_filing
 
 
 class TestHardSplit:

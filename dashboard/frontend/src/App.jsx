@@ -122,9 +122,9 @@ function App() {
 
   const eventSourcesRef = useRef({});
 
-  const handleProcessTicker = useCallback((ticker) => {
+  const handleProcessTicker = useCallback((ticker, options = {}) => {
     const tickerList = Array.isArray(ticker) ? ticker : [ticker];
-    runPipeline(tickerList)
+    runPipeline(tickerList, options)
       .then(data => {
         const validTickers = data.tickers || tickerList;
         const jobEntry = {

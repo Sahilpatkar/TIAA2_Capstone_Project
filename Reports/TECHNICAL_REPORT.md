@@ -154,13 +154,13 @@ Bumping `PIPELINE_VERSION` in `config.py` forces reprocessing of all filings. Th
 
 ## 4. RAG-Enhanced Chat System
 
-### 4.1 Indexing Pipeline (`rag/`)
+### 4.1 Indexing Pipeline (`tiaa.rag`)
 
 Filing text is indexed for retrieval-augmented generation:
 
-1. **Chunking** (`rag/chunker.py`): Cleaned filing JSON is split by Item section. Sections exceeding `RAG_CHUNK_MAX_CHARS` (3000) are sub-chunked at paragraph boundaries with `RAG_CHUNK_OVERLAP` (200) character overlap. Each chunk retains metadata: ticker, CIK, accession, report date, section key, and human-readable section label.
+1. **Chunking** (`tiaa.rag.chunker`): Cleaned filing JSON is split by Item section. Sections exceeding `RAG_CHUNK_MAX_CHARS` (3000) are sub-chunked at paragraph boundaries with `RAG_CHUNK_OVERLAP` (200) character overlap. Each chunk retains metadata: ticker, CIK, accession, report date, section key, and human-readable section label.
 
-2. **Embedding** (`rag/providers.py`): Chunks are embedded using OpenAI's `text-embedding-3-small` model (1536 dimensions). Rate limiting and batching (20 chunks per API call) are handled automatically.
+2. **Embedding** (`tiaa.rag.providers`): Chunks are embedded using OpenAI's `text-embedding-3-small` model (1536 dimensions). Rate limiting and batching (20 chunks per API call) are handled automatically.
 
 3. **Storage**: Embeddings are stored in a ChromaDB persistent collection at `data/vectordb/`. An `indexed.json` manifest tracks which filings have been indexed to avoid redundant work.
 
@@ -383,7 +383,7 @@ TIAA2_Capstone_Project/
 ├── store.py                        # SQLite persistence layer
 ├── advisor_query.py                # Portfolio aggregation + LLM narrative
 │
-├── rag/
+├── tiaa/rag/                       # Under src/tiaa/
 │   ├── __init__.py
 │   ├── chunker.py                  # Section-aware text chunking
 │   ├── providers.py                # Embedding, LLM, vector store abstractions
@@ -482,13 +482,13 @@ python run_pipeline.py --ciks 320193 --force
 
 ```bash
 # Index all filings in the database
-python -m rag.index
+python -m tiaa.rag.index
 
 # Index one ticker
-python -m rag.index --ticker AAPL
+python -m tiaa.rag.index --ticker AAPL
 
 # Force re-index
-python -m rag.index --reindex
+python -m tiaa.rag.index --reindex
 ```
 
 ### 10.3 Dashboard

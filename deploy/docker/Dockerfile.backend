@@ -13,7 +13,6 @@ RUN python -m nltk.downloader -d /usr/share/nltk_data \
     punkt punkt_tab stopwords wordnet
 
 COPY src/ ./src/
-COPY rag/ ./rag/
 COPY dashboard/backend/ ./dashboard/backend/
 
 RUN pip install --no-cache-dir -e .

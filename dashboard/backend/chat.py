@@ -86,12 +86,23 @@ def _build_context(tickers: list[str]) -> str:
 # RAG retrieval
 # ------------------------------------------------------------------
 
+# Each entry maps a regex to one section_key OR a tuple of keys when the
+# topic commonly spans multiple Items (e.g. banks put interest-rate-risk
+# content in MD&A with only a redirect stub in 7A).
 _SECTION_KEYWORD_MAP = [
     (r"\brisk\s*factors?\b", "item_1a"),
-    (r"\bmd&a\b", "item_7"),
-    (r"\bmanagement('?s)?\s+discussion\b", "item_7"),
-    (r"\blegal\s+proceedings?\b", "item_3"),
+    (r"\b(cyber|cybersecurity|cyber\s+security)\b", "item_1c"),
     (r"\bproperties\b", "item_2"),
+    (r"\blegal\s+proceedings?\b", "item_3"),
+    (r"\bmine\s+safety\b", "item_4"),
+    (r"\b(md&a|management('?s)?\s+discussion)\b", "item_7"),
+    (
+        r"\b(market\s+risk|interest\s+rate\s+risk|quantitative\s+(and\s+qualitative\s+)?(disclosures?\s+)?(about\s+)?market\s+risk)\b",
+        ("item_7a", "item_7"),
+    ),
+    (r"\bfinancial\s+statements?\b", "item_8"),
+    (r"\bcontrols?\s+(and\s+)?procedures?\b", "item_9a"),
+    (r"\bexecutive\s+compensation\b", "item_11"),
     (r"\bbusiness\s+overview\b", "item_1"),
 ]
 
@@ -107,9 +118,13 @@ def _infer_section_keys(query: str) -> list[str]:
         num = m.group(1)
         letter = (m.group(2) or "").lower()
         keys.append(f"item_{num}{letter}")
-    for pattern, key in _SECTION_KEYWORD_MAP:
-        if re.search(pattern, query, re.IGNORECASE) and key not in keys:
-            keys.append(key)
+    for pattern, value in _SECTION_KEYWORD_MAP:
+        if not re.search(pattern, query, re.IGNORECASE):
+            continue
+        candidates = (value,) if isinstance(value, str) else tuple(value)
+        for key in candidates:
+            if key not in keys:
+                keys.append(key)
     return keys
 
 
@@ -126,7 +141,7 @@ def _build_retrieval_query(message: str, history: list[dict]) -> str:
 def _retrieve_rag_context(query: str, tickers: list[str]) -> str:
     """Embed the query and retrieve relevant filing chunks from the vector store."""
     try:
-        from rag.providers import get_embedding_provider, get_vector_store
+        from tiaa.rag.providers import get_embedding_provider, get_vector_store
     except ImportError:
         return ""
 
@@ -139,47 +154,94 @@ def _retrieve_rag_context(query: str, tickers: list[str]) -> str:
 
         query_embedding = embedder.embed([query])[0]
 
-        where_filter: dict | None = None
-        clauses: list[dict] = []
-        if tickers and len(tickers) == 1:
-            clauses.append({"ticker": tickers[0]})
-        elif tickers and len(tickers) > 1:
-            clauses.append({"ticker": {"$in": tickers}})
-
         section_keys = _infer_section_keys(query)
-        if section_keys:
-            if len(section_keys) == 1:
-                clauses.append({"section_key": section_keys[0]})
-            else:
-                clauses.append({"section_key": {"$in": section_keys}})
 
-        if len(clauses) == 1:
-            where_filter = clauses[0]
-        elif len(clauses) > 1:
-            where_filter = {"$and": clauses}
+        def _section_clause() -> dict | None:
+            if not section_keys:
+                return None
+            if len(section_keys) == 1:
+                return {"section_key": section_keys[0]}
+            return {"section_key": {"$in": section_keys}}
 
         top_k = getattr(config, "RAG_TOP_K", 5)
-        # Exclude 10-Q Item 1A boilerplate stubs that just reference the 10-K.
-        where_document = {"$not_contains": "Refer to Part I, Item 1A"}
-        try:
-            results = store.search(
-                query_embedding=query_embedding,
-                top_k=top_k * 4,
-                where=where_filter,
-                where_document=where_document,
-            )
-        except TypeError:
-            results = store.search(
-                query_embedding=query_embedding,
-                top_k=top_k * 4,
-                where=where_filter,
-            )
+        # Exclude boilerplate redirect stubs:
+        #   - 10-Q Item 1A: "Refer to Part I, Item 1A..."
+        #   - Item 7A market-risk pointers: "Refer to the Market Risk Management section..."
+        where_document = {
+            "$and": [
+                {"$not_contains": "Refer to Part I, Item 1A"},
+                {"$not_contains": "Refer to the Market Risk Management"},
+            ]
+        }
+
+        def _search(where_filter: dict | None, k: int) -> list:
+            try:
+                return store.search(
+                    query_embedding=query_embedding,
+                    top_k=k,
+                    where=where_filter,
+                    where_document=where_document,
+                )
+            except TypeError:
+                return store.search(
+                    query_embedding=query_embedding,
+                    top_k=k,
+                    where=where_filter,
+                )
+
+        def _build_where(ticker_clause: dict | None) -> dict | None:
+            clauses = [c for c in (ticker_clause, _section_clause()) if c is not None]
+            if not clauses:
+                return None
+            if len(clauses) == 1:
+                return clauses[0]
+            return {"$and": clauses}
+
+        def _pick_preferring_latest(pool: list, k: int) -> list:
+            """Prefer chunks from the most recent report_date; top up from older
+            filings only if the latest doesn't have enough substantive matches.
+            Keeps semantic-similarity order within each date bucket.
+            """
+            if not pool:
+                return []
+            dated = [r for r in pool if r.get("metadata", {}).get("report_date")]
+            if not dated:
+                return pool[:k]
+            latest_date = max(r["metadata"]["report_date"] for r in dated)
+            latest = [r for r in pool if r.get("metadata", {}).get("report_date") == latest_date]
+            if len(latest) >= k:
+                return latest[:k]
+            older = [r for r in pool if r not in latest]
+            return (latest + older)[:k]
+
+        # Per-ticker retrieval when multiple tickers are selected, so each gets
+        # fair representation even if one has semantically "louder" content.
+        if tickers and len(tickers) > 1:
+            per_ticker_k = max(2, -(-top_k // len(tickers)))  # ceil division
+            per_ticker_lists: list[list] = []
+            for t in tickers:
+                # Wider pool so the latest filing has a real chance to supply k chunks.
+                t_results = _search(_build_where({"ticker": t}), per_ticker_k * 8)
+                t_substantive = [r for r in t_results if len(r.get("document", "")) >= 600]
+                pool = t_substantive or t_results
+                per_ticker_lists.append(_pick_preferring_latest(pool, per_ticker_k))
+
+            # Round-robin interleave so passages alternate across tickers.
+            results = []
+            for i in range(max((len(lst) for lst in per_ticker_lists), default=0)):
+                for lst in per_ticker_lists:
+                    if i < len(lst):
+                        results.append(lst[i])
+            results = results[: top_k * len(tickers)]
+        else:
+            ticker_clause = {"ticker": tickers[0]} if tickers else None
+            results = _search(_build_where(ticker_clause), top_k * 8)
+            substantive = [r for r in results if len(r.get("document", "")) >= 600]
+            pool = substantive or results
+            results = _pick_preferring_latest(pool, top_k)
 
         if not results:
             return ""
-
-        substantive = [r for r in results if len(r.get("document", "")) >= 600]
-        results = (substantive or results)[:top_k]
 
         passages: list[str] = []
         for r in results:
@@ -267,7 +329,7 @@ def handle_chat(
         return _template_response(message, tickers), True
 
     try:
-        from rag.providers import get_llm_provider
+        from tiaa.rag.providers import get_llm_provider
     except ImportError:
         return _template_response(message, tickers), True
 

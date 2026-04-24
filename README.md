@@ -52,12 +52,12 @@ src/tiaa/
 │                    # abnormal_returns, las, signals
 ├── backtest/        # core, comparison
 ├── advisor/         # query (portfolio narrative + sentiment)
+├── rag/             # chunker, providers, index (retrieval-augmented generation)
 └── config/          # paths, sec, features, las, signals, pipeline, llm_rag
                      # + reference/*.json lookup tables
 ```
 
-The RAG layer stays at the repo root under `rag/` and the dashboard under
-`dashboard/`; both import from `tiaa.*`.
+The dashboard lives under `dashboard/` and imports from `tiaa.*`.
 
 ## Pipeline Architecture
 
@@ -105,9 +105,9 @@ SEC EDGAR ─► pipeline/document_pull.py ─► Raw HTML (data/filings/entityN
 | `tiaa.advisor.query` | Aggregate portfolio LAS, retrieve highest-impact disclosure sections, generate LLM or template narrative with sentiment classification |
 | `tiaa.backtest.core` | Validation framework measuring whether LAS and signal classifications predict forward stock returns (30d/60d/90d/180d horizons) |
 | `tiaa.backtest.comparison` | Comparative analysis across different signal configurations and LAS weight schemes |
-| `rag/chunker.py` | Section-aware text chunker for 10-K filings with configurable max size and overlap |
-| `rag/providers.py` | Provider abstractions for embeddings (OpenAI), LLM (OpenAI), and vector store (ChromaDB) |
-| `rag/index.py` | CLI tool to embed and index filings into the vector store with manifest-based deduplication |
+| `tiaa.rag.chunker` | Section-aware text chunker for 10-K filings with configurable max size and overlap |
+| `tiaa.rag.providers` | Provider abstractions for embeddings (OpenAI), LLM (OpenAI), and vector store (ChromaDB) |
+| `tiaa.rag.index` | CLI tool to embed and index filings into the vector store with manifest-based deduplication |
 | `dashboard/backend/app.py` | Flask API server exposing all REST endpoints for the advisor dashboard |
 | `dashboard/backend/chat.py` | RAG-enhanced chat handler; retrieves filing passages and structured metrics for LLM context |
 
@@ -244,13 +244,13 @@ The chat panel supports Retrieval-Augmented Generation (RAG) to ground LLM respo
 
 ```bash
 # Index all filings in the database
-python -m rag.index
+python -m tiaa.rag.index
 
 # Index filings for a specific ticker
-python -m rag.index --ticker AAPL
+python -m tiaa.rag.index --ticker AAPL
 
 # Force re-index everything
-python -m rag.index --reindex
+python -m tiaa.rag.index --reindex
 ```
 
 ### RAG Architecture
@@ -278,9 +278,9 @@ User question
 
 | Module | Description |
 |---|---|
-| `rag/chunker.py` | Section-aware text chunker; splits cleaned filing JSON by Item section, sub-chunks large sections at paragraph boundaries with configurable overlap |
-| `rag/providers.py` | Provider abstractions (embedding, LLM, vector store) with concrete implementations for OpenAI + ChromaDB; swappable to AWS Bedrock + OpenSearch |
-| `rag/index.py` | CLI tool to embed and index filings into the vector store; tracks indexed filings via a manifest to avoid redundant work |
+| `tiaa.rag.chunker` | Section-aware text chunker; splits cleaned filing JSON by Item section, sub-chunks large sections at paragraph boundaries with configurable overlap |
+| `tiaa.rag.providers` | Provider abstractions (embedding, LLM, vector store) with concrete implementations for OpenAI + ChromaDB; swappable to AWS Bedrock + OpenSearch |
+| `tiaa.rag.index` | CLI tool to embed and index filings into the vector store; tracks indexed filings via a manifest to avoid redundant work |
 
 ### RAG Configuration
 
@@ -309,11 +309,11 @@ project_root/
 │   ├── analysis/                   # similarity, numeric_change, attention_proxy,
 │   │                               # abnormal_returns, las, signals
 │   ├── backtest/                   # core, comparison
-│   └── advisor/                    # query (portfolio narrative + sentiment)
-├── rag/                            # Retrieval-augmented generation layer
-│   ├── chunker.py                  # Section-aware filing chunker
-│   ├── providers.py                # Embedding, LLM, vector store abstractions
-│   └── index.py                    # CLI indexing tool
+│   ├── advisor/                    # query (portfolio narrative + sentiment)
+│   └── rag/                        # Retrieval-augmented generation layer
+│       ├── chunker.py              # Section-aware filing chunker
+│       ├── providers.py            # Embedding, LLM, vector store abstractions
+│       └── index.py                # CLI indexing tool
 ├── dashboard/
 │   ├── backend/
 │   │   ├── app.py                  # Flask API server

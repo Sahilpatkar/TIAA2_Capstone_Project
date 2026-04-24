@@ -36,6 +36,7 @@ function Sidebar({
   const [localSelected, setLocalSelected] = useState(selected);
   const [collapsedSectors, setCollapsedSectors] = useState({});
   const [search, setSearch] = useState('');
+  const [forcePull, setForcePull] = useState(false);
 
   const filteredSectorGroups = useMemo(() => {
     if (!search.trim()) return sectorGroups;
@@ -296,6 +297,28 @@ function Sidebar({
       >
         Analyze ({localSelected.length})
       </button>
+
+      <button
+        className="sidebar-btn sidebar-btn-secondary"
+        disabled={localSelected.length === 0 || !onProcessTicker}
+        onClick={() => onProcessTicker && onProcessTicker(localSelected, { force: forcePull })}
+        title={
+          forcePull
+            ? 'Re-pull + reprocess every filing (ignores the already-processed cache)'
+            : 'Pull any new filings and process them (skips filings already in the DB)'
+        }
+      >
+        Run Pipeline ({localSelected.length})
+      </button>
+
+      <label className="force-pull-option">
+        <input
+          type="checkbox"
+          checked={forcePull}
+          onChange={e => setForcePull(e.target.checked)}
+        />
+        Force re-pull
+      </label>
 
       {portfolioLas != null && (
         <div className="sidebar-las">
